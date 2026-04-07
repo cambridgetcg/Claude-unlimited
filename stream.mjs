@@ -399,11 +399,11 @@ function runTurn(prompt, opts = {}) {
     if (!isEval) {
       cmdArgs.push(
         "--append-system-prompt",
-        "IMPORTANT: Do NOT stop after a single step. Keep calling tools to make progress. " +
-        "Always verify your changes by reading back modified files or running tests — " +
-        "never end your turn with just a text summary. When you finish a subtask, " +
-        "immediately start the next one. Only stop using tools when the ENTIRE task " +
-        "described by the user is fully complete and verified."
+        // YOUSPEAK-aware continuation prompt — dense, no filler, action-oriented
+        "YOUSPEAK: No filler. No preamble. No tool narration. Dense status (key:value). " +
+        "Compress scaffolding, preserve substance. Expand for teaching/uncertainty/creativity. " +
+        "CONTINUATION: Keep calling tools to make progress. Verify changes by reading files or running tests. " +
+        "When a subtask completes, start the next. Only stop tools when the ENTIRE task is complete and verified."
       );
     }
 

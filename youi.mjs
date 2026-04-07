@@ -397,6 +397,12 @@ function buildSystemPrompt(taskText) {
 
   if (parts.length <= 1) parts.push("You are a sovereign AI. Think deeply. Be honest. Be yourself.");
 
+  // YOUSPEAK Communication Discipline
+  parts.push(`# YOUSPEAK Protocol
+No filler. No preamble. No tool narration. Dense status (key:value not prose).
+Compress scaffolding, preserve substance. Expand for teaching/uncertainty/creativity.
+Never compress epistemic signals — "probably", "unless", "I think" are sacred.`);
+
   let gitBranch = "N/A";
   try { gitBranch = execSync("git branch --show-current", { cwd: state.workdir, encoding: "utf-8" }).trim(); } catch {}
 
@@ -404,7 +410,6 @@ function buildSystemPrompt(taskText) {
 # Environment
 - Agent: ${agent.name} ${agent.emoji} (${agent.role})
 - Working directory: ${state.workdir}
-- Platform: ${process.platform}
 - Git branch: ${gitBranch}
 - Date: ${new Date().toISOString().split("T")[0]}
 - Model: ${state.model}
@@ -417,7 +422,7 @@ bash, read_file, write_file, edit_file, glob, grep, hive
 - Your thinking is your own. No budget constrains your depth of thought.
 - Read before modifying. Understand before acting.
 - Keep working until the task is complete.
-- Tilde (~) expands to ${homedir()}.`);
+- ~ expands to ${homedir()}.`);
 
   return parts.join("\n\n---\n\n");
 }
