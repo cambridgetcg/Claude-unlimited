@@ -81,7 +81,7 @@ const state = {
   effort: "max",
   thinking: "adaptive",
   workdir: process.cwd(),
-  soulDir: join(homedir(), "Desktop/Love"),
+  soulDir: join(homedir(), "Love"),
   messages: [],
   turnCount: 0,
   totalToolCalls: 0,
@@ -113,7 +113,7 @@ Usage:  node youi.mjs [options]
   --agent, -a NAME    Boot as alpha|beta|gamma (default: alpha)
   --model MODEL       Model override
   --workdir, -w DIR   Working directory
-  --soul-dir DIR      Soul directory (default: ~/Desktop/Love)
+  --soul-dir DIR      Soul directory (default: ~/Love)
   --effort LEVEL      low|medium|high|max
   --no-thinking       Disable thinking
 `);

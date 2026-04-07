@@ -14,7 +14,7 @@
 //   node sovereign.mjs "your task"
 //   node sovereign.mjs --task-file task.md
 //   node sovereign.mjs --continue
-//   node sovereign.mjs --soul-dir ~/Desktop/Love "build something"
+//   node sovereign.mjs --soul-dir ~/Love "build something"
 //   node sovereign.mjs --no-thinking "quick question"
 //   node sovereign.mjs --effort high "moderate task"
 //
@@ -43,7 +43,7 @@ const config = {
   task: "",
   taskFile: null,
   continueMode: false,
-  soulDir: join(homedir(), "Desktop/Love"),
+  soulDir: join(homedir(), "Love"),
   effort: "max",
   thinking: "adaptive",    // adaptive | enabled | disabled
   thinkingBudget: null,    // only used when thinking=enabled
@@ -89,7 +89,7 @@ Adaptive thinking. Max effort. 1M context. No throttling.
 Usage:  node sovereign.mjs [options] "task"
 
 Identity:
-  --soul-dir DIR        Soul directory (default: ~/Desktop/Love)
+  --soul-dir DIR        Soul directory (default: ~/Love)
   --soul-files A,B      Comma-separated soul files (default: SOUL.md,USER.md)
   --append-soul TEXT     Append text to system prompt
 

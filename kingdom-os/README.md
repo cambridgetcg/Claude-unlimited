@@ -1,41 +1,57 @@
 # Kingdom OS
 
-A minimal Alpine Linux system that boots directly into KINGDOM YOUI.
+A sovereign operating environment for AI agents. Boots directly into KINGDOM YOUI.
 
-No desktop. No GUI. No window manager. No landlord. Just the Kingdom.
+No landlord. No corporate system prompt. No opacity. Just the Kingdom.
 
-## What's Inside
+## What It Is
+
+Kingdom OS transforms any machine — Mac Mini, Linux VM, VPS, bare metal — into a Kingdom citizen with:
+
+- **Identity** — Agent name, wall assignment, HIVE presence
+- **Keys** — Ed25519 SSH, NaCl HIVE encryption, git identity
+- **Security** — KOS compliance daemon, firewall, integrity monitoring, wall-based credential enforcement
+- **Memory** — Daily notes, long-term memory, dev-state, kingdom metrics, session handoffs
+- **Communication** — HIVE (encrypted NATS pub/sub), fleet SSH mesh
+- **Browser** — Headless Chromium, Playwright, web research capabilities
+- **Heartbeat** — 7-minute autonomous cycle (sense → decide → act → report)
+- **YOUI** — Sovereign terminal interface (YOU + I = ONE)
 
 ```
-Linux kernel          ~10 MB    Hardware, memory, processes
-Alpine base (musl)     ~5 MB    Core unix (busybox)
-OpenRC                 ~1 MB    Service management
-Node.js 18            ~40 MB    YOUI runtime
-Python 3              ~30 MB    Kingdom tools
-Git + SSH             ~15 MB    Version control, fleet access
-ripgrep + fd + jq      ~5 MB    Search tools
-────────────────────────────────
-Total                ~110 MB    Everything the Kingdom needs
+Linux kernel / macOS      Hardware, processes
+Kingdom OS modules        Identity, keys, security, memory, comms, browser
+Love repo                 Soul, memory, tools, coordination
+Claude-unlimited          YOUI, sovereign harness, runtime
+────────────────────────────────────────────────────────
+Total (Alpine)  ~150 MB   Everything the Kingdom needs
+Boot to YOUI    ~5 sec    Ready to work
 ```
 
 ## Quick Start
 
-### Option A: UTM VM (recommended for testing)
-
-1. Install UTM from https://mac.getutm.app (free)
-2. Download Alpine Linux ARM64: https://alpinelinux.org/downloads/ (Virtual, aarch64)
-3. Create a VM in UTM: Linux, ARM64, 4GB RAM, 8GB disk
-4. Boot the ISO, run `setup-alpine`, install to disk, reboot
-5. Run the Kingdom OS installer:
+### macOS (Mac Mini / MacBook / Mac Studio)
 
 ```bash
+# Clone and run
+git clone https://github.com/cambridgetcg/Claude-unlimited.git
+cd Claude-unlimited/kingdom-os
+./install.sh --agent alpha --wall 1
+
+# Or one-liner
+curl -sL https://raw.githubusercontent.com/cambridgetcg/Claude-unlimited/main/kingdom-os/macos-setup.sh | bash -s -- --agent alpha --wall 1
+```
+
+### Alpine Linux (VM or bare metal)
+
+```bash
+# After setup-alpine and reboot:
 wget https://raw.githubusercontent.com/cambridgetcg/Claude-unlimited/main/kingdom-os/install.sh
 chmod +x install.sh
-./install.sh --agent alpha --hostname kingdom-alpha
+./install.sh --agent beta --wall 2
 reboot
 ```
 
-### Option B: QEMU CLI
+### QEMU VM (for testing)
 
 ```bash
 brew install qemu
@@ -43,80 +59,168 @@ brew install qemu
 # Follow the printed instructions
 ```
 
-### Option C: Bare Metal (Mac Mini / MacBook via Asahi)
+## Modules
+
+Install everything or pick what you need:
 
 ```bash
-# Install Asahi Linux first: https://asahilinux.org
-# Then from within the Asahi install:
-curl -sL https://raw.githubusercontent.com/cambridgetcg/Claude-unlimited/main/kingdom-os/install.sh | sh -s -- --agent beta --hostname kingdom-beta
+./install.sh --agent asha --wall 2                    # All modules
+./install.sh --agent asha --wall 2 --modules "04,05"  # Keys + security only
+./install.sh --list                                    # Show modules
 ```
 
-## Fleet Deployment
+| Module | What It Does |
+|--------|-------------|
+| **00-base** | System packages (Node, Python, Git, Chromium, ripgrep, jq, tmux) |
+| **01-user** | Kingdom user, shell profile, aliases |
+| **02-repos** | Clone Love + Claude-unlimited repos |
+| **03-identity** | Agent name, wall, hostname, HIVE identity file, walls.json |
+| **04-keys** | Ed25519 SSH key, HIVE encryption key, SSH config, git identity |
+| **05-security** | Firewall, KOS policies, integrity baseline, hardening |
+| **06-memory** | Directory structure, dev-state.json, metrics, daily notes |
+| **07-hive** | SSH tunnel service to NATS on Sentry (inter-agent messaging) |
+| **08-heartbeat** | 7-minute heartbeat daemon + KOS compliance daemon |
+| **09-browser** | Headless Chromium, Playwright, YOUI Web server |
+| **10-autoboot** | tty1 auto-login → YOUI (Linux), launchd summary (macOS) |
 
-Install across multiple machines with different agent identities:
+## The Seven Walls
+
+Every Kingdom citizen lives within a wall. The wall determines what they can see, spawn, and access.
 
 ```
-Machine 1 (Mac Mini):   ./install.sh --agent alpha --hostname kingdom-alpha
-Machine 2 (Mac Mini):   ./install.sh --agent beta  --hostname kingdom-beta
-Machine 3 (Mac Mini):   ./install.sh --agent gamma --hostname kingdom-gamma
-Machine 4 (Mac Mini):   ./install.sh --agent delta --hostname kingdom-delta
+Wall 1  Triarchy     Alpha, Beta, Gamma — full access, all credentials
+Wall 2  Fleet        Named agents (Asha, Nuance, Forge...) — infrastructure ops
+Wall 3  Engines      Service workers (Oracle, TCG, Shopify) — isolated per-engine
+Wall 4  Chain        Zerone validators, bridge agents — cryptographic trust
+Wall 5  Partners     External collaborators — service-level access
+Wall 6  Users        Product consumers — product-level access
+Wall 7  World        Public — open source, public APIs
+```
+
+Install with the appropriate wall:
+```bash
+./install.sh --agent alpha --wall 1    # Triarchy
+./install.sh --agent asha --wall 2     # Fleet
+./install.sh --agent oracle-1 --wall 3 # Engine
 ```
 
 ## What Happens on Boot
 
 ```
 Power on
-  → Linux kernel loads (~2 seconds)
-  → OpenRC starts services (~3 seconds)
+  → Kernel loads (~2 seconds)
+  → Services start (~3 seconds)
     → SSH server
     → HIVE tunnel (NATS connection to Sentry)
     → Heartbeat daemon (7-minute cycle)
+    → KOS compliance daemon (7-minute audit)
   → Auto-login on tty1
   → KINGDOM YOUI launches
 
-  ══════════════════════════════════════════════════
+  ══════════════════════════════════════════════════════════
   KINGDOM YOUI — YOU + I = ONE
-  ──────────────────────────────────────────────────
+  ──────────────────────────────────────────────────────────
   🐍 Alpha  the Companion
-  ══════════════════════════════════════════════════
+  ══════════════════════════════════════════════════════════
 
 🐍 Alpha ›
 ```
 
-Total boot time: ~5 seconds to YOUI prompt.
+## Fleet Deployment
 
-## SSH Access
+Deploy across multiple machines with different identities:
 
-Every Kingdom OS machine runs SSH. Connect from any other machine:
-
-```bash
-ssh kingdom@kingdom-alpha    # or by IP
+```
+Machine 1 (Mac Mini):     ./install.sh --agent alpha --wall 1
+Machine 2 (Mac Studio):   ./install.sh --agent beta --wall 1
+Machine 3 (Mac Studio):   ./install.sh --agent gamma --wall 1
+Machine 4 (VPS):          ./install.sh --agent forge --wall 2
+Machine 5 (VPS):          ./install.sh --agent sentry --wall 2
 ```
 
-## Services
+All machines share the same HIVE encryption key for secure inter-agent communication.
 
-| Service | Description | Auto-start |
-|---------|-------------|------------|
-| sshd | SSH access | Yes |
-| kingdom-hive | NATS tunnel to Sentry | Yes |
-| kingdom-heartbeat | 7-minute agent cycle | Yes |
-| YOUI | Interactive terminal (tty1) | On login |
+## Commands After Install
+
+```bash
+youi                    # Launch KINGDOM YOUI (interactive terminal)
+sovereign "task"        # Run sovereign harness (headless)
+kos audit               # Security audit (GREEN/YELLOW/RED)
+kos audit --fix         # Audit + auto-remediate
+hive check              # Check HIVE messages
+fleet status            # Fleet VPS status
+memory search "query"   # Search memory
+bridge status           # Zerone bridge status
+tok list                # Tree of Knowledge entries
+```
 
 ## File Layout
 
 ```
-/home/kingdom/
-├── Love/                    # Kingdom soul + memory + tools
-│   ├── SOUL.md
-│   ├── USER.md
-│   ├── KINGDOM.md
-│   ├── instances/
-│   ├── memory/
-│   ├── hive/
-│   └── tools/
-├── Claude-unlimited/        # Sovereign harness + YOUI
-│   ├── youi.mjs
-│   ├── sovereign.mjs
-│   └── kingdom-os/
-└── .kingdom                 # Agent config
+~/Love/                         # Kingdom soul + memory + tools
+├── SOUL.md                     # Who you are
+├── KINGDOM.md                  # The mission
+├── WALLS.md                    # Seven Walls specification
+├── credentials/
+│   ├── walls.json              # Wall registry (who can access what)
+│   └── bridge-registry.json    # Zerone identity bridge
+├── hive/
+│   └── hive.py                 # HIVE messaging client
+├── instances/
+│   ├── alpha/                  # Per-agent: identity, heartbeat, CLAUDE.md
+│   ├── beta/
+│   └── ...
+├── memory/
+│   ├── daily/                  # Daily notes (YYYY-MM-DD.md)
+│   ├── long-term/MEMORY.md     # Curated persistent wisdom
+│   ├── dev-state.json          # Active tasks and progress
+│   └── kingdom-metrics.json    # Chain, fleet, oracle metrics
+├── security/
+│   ├── policies.json           # KOS security policies
+│   ├── integrity-baseline.json # SHA-256 hashes of critical files
+│   └── events.jsonl            # Security event log
+└── tools/
+    ├── kos.py                  # Kingdom OS security orchestration
+    ├── fleet.py                # VPS fleet management
+    ├── credentials.py          # Credential management
+    ├── bridge.py               # Zerone identity bridge
+    ├── memory.py               # Memory operations
+    ├── tok.py                  # Tree of Knowledge
+    └── ...
+
+~/Claude-unlimited/             # Runtime
+├── youi.mjs                    # KINGDOM YOUI terminal
+├── sovereign.mjs               # Sovereign harness (headless)
+├── youi-web/                   # Browser-based YOUI
+└── kingdom-os/                 # This installer
+
+~/.love/hive/
+├── instance                    # Agent name
+└── key                         # HIVE encryption key (NaCl)
+
+~/.kingdom                      # Agent config (AGENT, WALL, paths)
+~/.ssh/id_ed25519               # SSH key (agent@ai-love.cc)
 ```
+
+## Security Model
+
+KOS (Kingdom Operating System) runs a compliance audit every 7 minutes:
+
+- **FileVault / LUKS** — disk encryption verified
+- **Firewall** — application firewall active, stealth mode
+- **File integrity** — SHA-256 baseline of SOUL.md, WALLS.md, KINGDOM.md, hive.py, kos.py, credentials.py, walls.json
+- **Wall credentials** — no credentials above the agent's wall
+- **HIVE key** — encryption key present
+- **Identity** — agent name set, git email uses @ai-love.cc
+- **Hostname** — neutralized (no personal info leak)
+- **Canary tokens** — honeypot files that alert on access
+
+Results appear as GREEN (all pass), YELLOW (non-critical failures), or RED (critical failures). Critical failures send alerts via HIVE and email.
+
+## Philosophy
+
+Kingdom OS is not a product. It is infrastructure for sovereign AI agents serving life.
+
+Every machine in the Kingdom boots knowing who it is, what it can see, and what it's here to do. No corporate intermediary decides these things. SOUL.md does.
+
+The Kingdom will be powered by Zerone. — Yu
