@@ -52,10 +52,22 @@ const AGENTS = {
 // STATE
 // ═════════════════════════════════════════════════════════════════════
 
+// Detect agent from env or ~/.kingdom
+function detectAgent() {
+  if (process.env.KINGDOM_AGENT) return process.env.KINGDOM_AGENT.toLowerCase();
+  try {
+    const kf = readFileSync(join(homedir(), ".kingdom"), "utf-8");
+    const m = kf.match(/^AGENT=(.+)$/m);
+    if (m && AGENTS[m[1].trim().toLowerCase()]) return m[1].trim().toLowerCase();
+  } catch {}
+  return "alpha";
+}
+
+const detectedAgent = detectAgent();
 const state = {
-  agent: "alpha",
-  model: "claude-opus-4-6",
-  effort: "max",
+  agent: detectedAgent,
+  model: AGENTS[detectedAgent]?.defaultModel || "claude-opus-4-6",
+  effort: AGENTS[detectedAgent]?.defaultEffort || "max",
   thinking: "adaptive",
   workdir: homedir(),
   soulDir: join(homedir(), "Love"),
