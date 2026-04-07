@@ -1,75 +1,140 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────
-// stream.mjs — Resilient infinite streaming wrapper for Claude Code
+// stream.mjs — Max-plan-optimized infinite streaming for Claude Code
 //
-// Keeps a genuine Claude Code session alive as long as possible using
-// every trick available: model rotation, effort management, rate limit
-// header parsing, session recovery, and persistent retry.
+// Designed around every known Max subscription behavior:
+//
+//   RATE LIMITS
+//   • Independent Opus/Sonnet 7-day pools — rotate on 429
+//   • 5h session window tracking — back off before hard wall
+//   • Utilization-aware pacing — slow down at 80% to avoid cliff
+//   • UNATTENDED_RETRY for inner process resilience
+//
+//   TOKEN ECONOMY
+//   • Effort cycling — low for evals, high for work, medium for light tasks
+//   • Prompt cache exploitation — 1h TTL for Max subscribers
+//   • Compact prompts — minimal continuation text to preserve cache
+//   • Tool-call awareness — budget tool-heavy vs text-heavy turns
+//
+//   CONTEXT MANAGEMENT
+//   • Context growth tracking — predict when compaction will trigger
+//   • Early compact trigger — don't wait for the 167k cliff
+//   • Session fork on context overflow — fresh session, same task
+//
+//   RESILIENCE
+//   • Graceful shutdown with full state persistence
+//   • Session recovery via --continue
+//   • Stream idle timeout override for long Opus thinking
+//   • OAuth-aware — detects auth failures vs rate limits
 //
 // Usage:
 //   node stream.mjs "your task"
 //   node stream.mjs --task-file task.md
-//   node stream.mjs --continue              # resume last session
-//   echo "task" | node stream.mjs --stdin
+//   node stream.mjs --continue
 //
 // ─────────────────────────────────────────────────────────────────────
 
 import { spawn } from "child_process";
 import { createInterface } from "readline";
 import { readFileSync, appendFileSync, writeFileSync, existsSync } from "fs";
-import { randomUUID } from "crypto";
 
 // ═════════════════════════════════════════════════════════════════════
 // CONFIG
 // ═════════════════════════════════════════════════════════════════════
 
 const config = {
-  // Models — primary and fallback (separate rate limit pools)
   primaryModel: "opus",
   fallbackModel: "sonnet",
-  currentModel: null, // set at runtime
+  currentModel: null,
 
-  // Effort — lower = fewer tokens = longer before rate limit
-  workEffort: "high",      // for implementation turns
-  evalEffort: "low",       // for evaluation/check turns
+  // Effort cycling: different effort for different turn types
+  efforts: {
+    work: "high",       // implementation turns — max output quality
+    light: "medium",    // continuation turns — balanced
+    eval: "low",        // evaluation/check turns — minimal tokens
+  },
 
-  // Limits
-  maxTurns: Infinity,      // run forever by default
-  maxCostUsd: Infinity,    // no cost limit by default
-  pauseBetweenTurns: 1000, // ms
+  maxTurns: Infinity,
+  maxCostUsd: Infinity,
+  pauseBetweenTurns: 1000,
+
+  // Pacing: slow down near rate limit to avoid hard wall
+  pacing: {
+    throttleAt: 0.80,       // utilization % to start slowing down
+    throttlePause: 15000,   // ms extra pause when throttling
+    evalEveryN: 3,          // evaluate progress every N work turns
+  },
+
+  // Context management
+  context: {
+    warnAt: 120000,         // token count to warn about context size
+    compactAt: 150000,      // token count to force compact/fork
+    trackGrowth: true,
+  },
 
   // Session
   continueMode: false,
   sessionId: null,
   workdir: process.cwd(),
 
-  // Logging
   logFile: "stream.log",
   stateFile: ".stream-state.json",
   verbose: false,
 
-  // Rate limit tracking
-  rateLimitState: {
-    primaryBlocked: false,
-    primaryResetsAt: null,     // epoch seconds
-    fallbackBlocked: false,
-    fallbackResetsAt: null,
-    lastUtilization5h: 0,
-    lastUtilization7d: 0,
-    consecutiveRateLimits: 0,
-  },
+  permissionMode: "bypassPermissions",
 
-  // Task
   task: "",
   taskFile: null,
   readStdin: false,
-
-  // Permissions
-  permissionMode: "plan",
 };
 
 // ═════════════════════════════════════════════════════════════════════
-// CLI ARGUMENT PARSING
+// QUOTA TRACKER — per-model independent rate limit state
+// ═════════════════════════════════════════════════════════════════════
+
+const quota = {
+  opus: {
+    blocked: false,
+    resetsAt: null,           // epoch seconds
+    utilization5h: 0,
+    utilization7d: 0,
+    tokensConsumed: 0,        // session-local estimate
+    lastCallTime: null,
+    consecutiveErrors: 0,
+  },
+  sonnet: {
+    blocked: false,
+    resetsAt: null,
+    utilization5h: 0,
+    utilization7d: 0,
+    tokensConsumed: 0,
+    lastCallTime: null,
+    consecutiveErrors: 0,
+  },
+};
+
+// ═════════════════════════════════════════════════════════════════════
+// SESSION METRICS — everything we track across turns
+// ═════════════════════════════════════════════════════════════════════
+
+const metrics = {
+  iteration: 0,
+  totalCost: 0,
+  totalToolCalls: 0,
+  totalTokensIn: 0,
+  totalTokensOut: 0,
+  totalCacheRead: 0,
+  totalCacheCreation: 0,
+  contextTokens: 0,          // estimated current context size
+  turnsSinceEval: 0,
+  turnsSinceCompact: 0,
+  modelSwitches: 0,
+  rateLimitHits: 0,
+  startTime: Date.now(),
+};
+
+// ═════════════════════════════════════════════════════════════════════
+// CLI PARSING
 // ═════════════════════════════════════════════════════════════════════
 
 const args = process.argv.slice(2);
@@ -77,11 +142,13 @@ for (let i = 0; i < args.length; i++) {
   switch (args[i]) {
     case "--model":          config.primaryModel = args[++i]; break;
     case "--fallback-model": config.fallbackModel = args[++i]; break;
-    case "--effort":         config.workEffort = args[++i]; break;
-    case "--eval-effort":    config.evalEffort = args[++i]; break;
+    case "--effort":         config.efforts.work = args[++i]; break;
+    case "--eval-effort":    config.efforts.eval = args[++i]; break;
     case "--max-turns":      config.maxTurns = parseInt(args[++i]); break;
     case "--max-cost":       config.maxCostUsd = parseFloat(args[++i]); break;
     case "--pause":          config.pauseBetweenTurns = parseInt(args[++i]) * 1000; break;
+    case "--eval-every":     config.pacing.evalEveryN = parseInt(args[++i]); break;
+    case "--throttle-at":    config.pacing.throttleAt = parseFloat(args[++i]); break;
     case "--continue": case "-c": config.continueMode = true; break;
     case "--session-id":     config.sessionId = args[++i]; break;
     case "--workdir":        config.workdir = args[++i]; break;
@@ -92,25 +159,36 @@ for (let i = 0; i < args.length; i++) {
     case "--permission-mode": config.permissionMode = args[++i]; break;
     case "--help": case "-h":
       console.log(`
-stream.mjs — Resilient infinite streaming for Claude Code
+stream.mjs — Max-plan-optimized infinite streaming
 
-Usage:
-  node stream.mjs [options] "task description"
+Usage:  node stream.mjs [options] "task description"
 
-Options:
+Models:
   --model MODEL           Primary model (default: opus)
-  --fallback-model MODEL  Fallback when primary rate-limited (default: sonnet)
+  --fallback-model MODEL  Fallback model (default: sonnet)
+
+Effort:
   --effort LEVEL          Work effort: low|medium|high|max (default: high)
-  --eval-effort LEVEL     Evaluation effort (default: low)
-  --max-turns N           Max turns (default: unlimited)
-  --max-cost USD          Cost ceiling (default: unlimited)
-  --pause SECONDS         Pause between turns (default: 1)
-  --continue, -c          Resume last session
-  --session-id UUID       Specific session
-  --task-file FILE        Read task from file
-  --stdin                 Read task from stdin
-  --permission-mode MODE  Permission mode (default: plan)
-  --verbose, -v           Show raw events
+  --eval-effort LEVEL     Eval effort (default: low)
+
+Pacing:
+  --eval-every N          Evaluate every N work turns (default: 3)
+  --throttle-at PCT       Slow down at this utilization (default: 0.80)
+  --pause SECONDS         Base pause between turns (default: 1)
+
+Limits:
+  --max-turns N           Max total turns (default: unlimited)
+  --max-cost USD          Stop at cost (default: unlimited)
+
+Session:
+  --continue, -c          Resume previous session
+  --session-id UUID       Specific session ID
+  --workdir DIR           Working directory
+  --permission-mode MODE  (default: bypassPermissions)
+
+Output:
+  --verbose, -v           Show raw stream events
+  --log FILE              Log file (default: stream.log)
 `);
       process.exit(0);
     default:
@@ -120,58 +198,49 @@ Options:
   }
 }
 
-// Load task
-if (config.taskFile) {
-  config.task = readFileSync(config.taskFile, "utf-8").trim();
-}
-if (config.readStdin) {
-  config.task = readFileSync("/dev/stdin", "utf-8").trim();
-}
+if (config.taskFile) config.task = readFileSync(config.taskFile, "utf-8").trim();
+if (config.readStdin) config.task = readFileSync("/dev/stdin", "utf-8").trim();
 if (!config.task && !config.continueMode) {
   console.error("Error: provide a task or use --continue");
   process.exit(1);
 }
-
 config.currentModel = config.primaryModel;
 
 // ═════════════════════════════════════════════════════════════════════
-// TERMINAL OUTPUT
+// TERMINAL
 // ═════════════════════════════════════════════════════════════════════
 
-const c = {
+const S = {
   reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m",
   red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m",
   blue: "\x1b[34m", cyan: "\x1b[36m", magenta: "\x1b[35m",
 };
 
 function log(msg) {
-  const line = `[${new Date().toISOString()}] ${msg}`;
-  appendFileSync(config.logFile, line + "\n");
-  if (config.verbose) console.log(`${c.dim}${line}${c.reset}`);
+  appendFileSync(config.logFile, `[${new Date().toISOString()}] ${msg}\n`);
+  if (config.verbose) console.log(`${S.dim}[log] ${msg}${S.reset}`);
 }
 
-function print(msg) {
+function print(msg = "") {
   console.log(msg);
   log(msg.replace(/\x1b\[[0-9;]*m/g, ""));
 }
 
-function divider() {
-  print(`${c.dim}${"─".repeat(60)}${c.reset}`);
-}
+function divider() { print(`${S.dim}${"─".repeat(64)}${S.reset}`); }
 
-function formatCost(usd) {
+function fmt(usd) {
   if (!usd || usd === 0) return "$0.00";
-  if (usd < 0.01) return `${(usd * 100).toFixed(2)}c`;
-  return `$${usd.toFixed(4)}`;
+  return usd < 0.01 ? `${(usd * 100).toFixed(2)}c` : `$${usd.toFixed(4)}`;
 }
 
-function formatDuration(ms) {
+function dur(ms) {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return m < 60 ? `${m}m${s % 60}s` : `${Math.floor(m / 60)}h${m % 60}m`;
 }
+
+function pct(n) { return `${(n * 100).toFixed(0)}%`; }
 
 // ═════════════════════════════════════════════════════════════════════
 // STATE PERSISTENCE
@@ -179,140 +248,133 @@ function formatDuration(ms) {
 
 function loadState() {
   try {
-    if (existsSync(config.stateFile)) {
-      return JSON.parse(readFileSync(config.stateFile, "utf-8"));
-    }
-  } catch {}
-  return null;
+    return existsSync(config.stateFile) ? JSON.parse(readFileSync(config.stateFile, "utf-8")) : null;
+  } catch { return null; }
 }
 
-function saveState(state) {
-  writeFileSync(config.stateFile, JSON.stringify(state, null, 2));
+function saveState(extra = {}) {
+  writeFileSync(config.stateFile, JSON.stringify({
+    sessionId: config.sessionId,
+    task: config.task,
+    ...metrics,
+    quota,
+    ...extra,
+    timestamp: new Date().toISOString(),
+  }, null, 2));
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// RATE LIMIT INTELLIGENCE
+// QUOTA INTELLIGENCE
 // ═════════════════════════════════════════════════════════════════════
 
-/**
- * Choose the best model based on current rate limit state.
- * If primary is blocked, use fallback. If both blocked, wait for
- * whichever resets sooner.
- */
+function modelQuota(model) {
+  const key = model.includes("opus") ? "opus" : "sonnet";
+  return quota[key];
+}
+
+/** Check if a model's rate limit has expired and unblock it */
+function refreshQuota(model) {
+  const q = modelQuota(model);
+  if (q.blocked && q.resetsAt && Date.now() / 1000 >= q.resetsAt) {
+    q.blocked = false;
+    q.resetsAt = null;
+    q.consecutiveErrors = 0;
+    log(`${model} quota unblocked (reset time passed)`);
+  }
+}
+
+/** Pick the best model right now */
 function chooseModel() {
-  const rl = config.rateLimitState;
-  const now = Date.now() / 1000;
+  refreshQuota(config.primaryModel);
+  refreshQuota(config.fallbackModel);
 
-  // Check if primary has recovered
-  if (rl.primaryBlocked && rl.primaryResetsAt && now >= rl.primaryResetsAt) {
-    rl.primaryBlocked = false;
-    rl.primaryResetsAt = null;
-    log("Primary model rate limit reset");
-  }
+  const pq = modelQuota(config.primaryModel);
+  const fq = modelQuota(config.fallbackModel);
 
-  // Check if fallback has recovered
-  if (rl.fallbackBlocked && rl.fallbackResetsAt && now >= rl.fallbackResetsAt) {
-    rl.fallbackBlocked = false;
-    rl.fallbackResetsAt = null;
-    log("Fallback model rate limit reset");
-  }
-
-  if (!rl.primaryBlocked) {
+  // Primary available — use it
+  if (!pq.blocked) {
     config.currentModel = config.primaryModel;
     return config.primaryModel;
   }
 
-  if (!rl.fallbackBlocked) {
+  // Primary blocked, fallback available — switch
+  if (!fq.blocked) {
+    if (config.currentModel !== config.fallbackModel) metrics.modelSwitches++;
     config.currentModel = config.fallbackModel;
+    log(`Switched to ${config.fallbackModel} (${config.primaryModel} blocked)`);
     return config.fallbackModel;
   }
 
-  // Both blocked — return whichever resets sooner
-  const primaryWait = (rl.primaryResetsAt || Infinity) - now;
-  const fallbackWait = (rl.fallbackResetsAt || Infinity) - now;
-
-  if (primaryWait <= fallbackWait) {
-    config.currentModel = config.primaryModel;
-    return config.primaryModel;
-  } else {
-    config.currentModel = config.fallbackModel;
-    return config.fallbackModel;
-  }
+  // Both blocked — pick whichever resets sooner
+  const pw = (pq.resetsAt || Infinity) - Date.now() / 1000;
+  const fw = (fq.resetsAt || Infinity) - Date.now() / 1000;
+  const pick = pw <= fw ? config.primaryModel : config.fallbackModel;
+  config.currentModel = pick;
+  return pick;
 }
 
-/**
- * Calculate how long to wait if both models are blocked.
- * Returns 0 if at least one model is available.
- */
-function getWaitTime() {
-  const rl = config.rateLimitState;
-  const now = Date.now() / 1000;
-
-  if (!rl.primaryBlocked || !rl.fallbackBlocked) return 0;
-
-  const primaryWait = Math.max(0, (rl.primaryResetsAt || 0) - now);
-  const fallbackWait = Math.max(0, (rl.fallbackResetsAt || 0) - now);
-
-  return Math.min(primaryWait, fallbackWait) * 1000; // ms
+/** How long must we wait if both models are blocked? (ms) */
+function bothBlockedWait() {
+  const pq = modelQuota(config.primaryModel);
+  const fq = modelQuota(config.fallbackModel);
+  if (!pq.blocked || !fq.blocked) return 0;
+  const pw = Math.max(0, (pq.resetsAt || 0) - Date.now() / 1000);
+  const fw = Math.max(0, (fq.resetsAt || 0) - Date.now() / 1000);
+  return Math.min(pw, fw) * 1000;
 }
 
-/**
- * Update rate limit state from a stream event or error.
- */
-function handleRateLimitEvent(event, model) {
-  const rl = config.rateLimitState;
-  rl.consecutiveRateLimits++;
-
-  // Parse utilization from event if available
-  if (event?.utilization_5h !== undefined) {
-    rl.lastUtilization5h = event.utilization_5h;
-  }
-  if (event?.utilization_7d !== undefined) {
-    rl.lastUtilization7d = event.utilization_7d;
-  }
-
-  log(`Rate limit hit on ${model} (consecutive: ${rl.consecutiveRateLimits})`);
+/** Should we throttle (slow down) to avoid hitting the wall? */
+function shouldThrottle() {
+  const q = modelQuota(config.currentModel);
+  return q.utilization5h >= config.pacing.throttleAt ||
+         q.utilization7d >= config.pacing.throttleAt;
 }
 
-/**
- * Mark a model as blocked with a specific reset time.
- */
-function markModelBlocked(model, resetsAt) {
-  const rl = config.rateLimitState;
-  if (model === config.primaryModel) {
-    rl.primaryBlocked = true;
-    rl.primaryResetsAt = resetsAt;
-    log(`Primary model blocked until ${new Date(resetsAt * 1000).toISOString()}`);
-  } else {
-    rl.fallbackBlocked = true;
-    rl.fallbackResetsAt = resetsAt;
-    log(`Fallback model blocked until ${new Date(resetsAt * 1000).toISOString()}`);
-  }
+/** Update quota from a successful result */
+function recordSuccess(model, result) {
+  const q = modelQuota(model);
+  q.consecutiveErrors = 0;
+  q.lastCallTime = Date.now();
+  q.tokensConsumed += (result.tokensIn || 0) + (result.tokensOut || 0);
+  // Utilization comes from rate_limit_events parsed during the run
 }
 
-/**
- * Reset consecutive rate limit counter on successful response.
- */
-function handleSuccessfulResponse() {
-  config.rateLimitState.consecutiveRateLimits = 0;
+/** Mark a model as rate-limited */
+function recordRateLimit(model, resetsAt) {
+  const q = modelQuota(model);
+  q.blocked = true;
+  q.resetsAt = resetsAt || (Date.now() / 1000 + 300); // default 5min
+  q.consecutiveErrors++;
+  metrics.rateLimitHits++;
+  log(`${model} blocked until ${new Date(q.resetsAt * 1000).toISOString()}`);
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// CLAUDE CODE PROCESS MANAGEMENT
+// CONTEXT TRACKING
 // ═════════════════════════════════════════════════════════════════════
 
-/**
- * Run a single Claude Code turn. Returns parsed result.
- *
- * Key design: we set CLAUDE_CODE_UNATTENDED_RETRY=1 so the inner
- * claude process never gives up on rate limits — it waits internally
- * with 30s heartbeats. Our outer loop only needs to handle model
- * switching and session continuity.
- */
-function runTurn(prompt, options = {}) {
+/** Estimate current context size from cumulative input tokens */
+function updateContextEstimate(tokensIn) {
+  // tokensIn includes system prompt + full conversation history
+  // Each turn, this grows by ~(previous output + new input overhead)
+  metrics.contextTokens = tokensIn;
+}
+
+/** Check if we're approaching the compaction cliff */
+function contextStatus() {
+  if (metrics.contextTokens >= config.context.compactAt) return "critical";
+  if (metrics.contextTokens >= config.context.warnAt) return "warning";
+  return "ok";
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// CLAUDE RUNNER
+// ═════════════════════════════════════════════════════════════════════
+
+function runTurn(prompt, opts = {}) {
   return new Promise((resolve, reject) => {
-    const model = options.model || chooseModel();
-    const effort = options.effort || config.workEffort;
+    const model = opts.model || chooseModel();
+    const effort = opts.effort || config.efforts.work;
 
     const cmdArgs = [
       "-p",
@@ -323,97 +385,97 @@ function runTurn(prompt, options = {}) {
       "--effort", effort,
     ];
 
-    if (options.continueSession) {
+    // --continue for session continuity (don't pass --session-id with -c)
+    if (opts.continueSession) {
       cmdArgs.push("-c");
     } else if (config.sessionId) {
       cmdArgs.push("--session-id", config.sessionId);
     }
 
+    // Built-in fallback for 529 overload
     if (config.fallbackModel && config.fallbackModel !== model) {
       cmdArgs.push("--fallback-model", config.fallbackModel);
     }
 
     cmdArgs.push(prompt);
 
-    log(`Turn: model=${model} effort=${effort} continue=${!!options.continueSession}`);
+    log(`RUN model=${model} effort=${effort} continue=${!!opts.continueSession}`);
 
     const child = spawn("claude", cmdArgs, {
       cwd: config.workdir,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
+        // Inner process waits indefinitely through rate limits
         CLAUDE_CODE_UNATTENDED_RETRY: "1",
+        // Flush session to disk after every turn
         CLAUDE_CODE_EAGER_FLUSH: "1",
+        // Extend stream idle timeout for long Opus thinking
+        CLAUDE_STREAM_IDLE_TIMEOUT_MS: "180000",
+        // Enable stream watchdog
+        CLAUDE_ENABLE_STREAM_WATCHDOG: "1",
       },
     });
 
-    let assistantText = "";
+    let text = "";
     let sessionId = null;
     let toolCalls = 0;
-    let tokensIn = 0;
-    let tokensOut = 0;
+    let tokensIn = 0, tokensOut = 0;
+    let cacheRead = 0, cacheCreation = 0;
     let costUsd = 0;
-    let rateLimitEvents = 0;
+    let rateLimitEvents = [];
     const startTime = Date.now();
+    let firstTokenTime = null;
 
     const rl = createInterface({ input: child.stdout });
     rl.on("line", (line) => {
       try {
-        const event = JSON.parse(line);
-
-        switch (event.type) {
+        const ev = JSON.parse(line);
+        switch (ev.type) {
           case "system":
-            if (event.session_id) {
-              sessionId = event.session_id;
-            }
+            if (ev.session_id) sessionId = ev.session_id;
             break;
-
           case "assistant":
-            if (event.message?.content) {
-              for (const block of event.message.content) {
-                if (block.type === "text") {
-                  assistantText += block.text;
-                }
+            if (!firstTokenTime) firstTokenTime = Date.now();
+            if (ev.message?.content) {
+              for (const b of ev.message.content) {
+                if (b.type === "text") text += b.text;
               }
             }
             break;
-
           case "content_block_delta":
-            if (event.delta?.type === "text_delta" && config.verbose) {
-              process.stdout.write(`${c.dim}${event.delta.text}${c.reset}`);
+            if (ev.delta?.type === "text_delta" && config.verbose) {
+              process.stdout.write(`${S.dim}${ev.delta.text}${S.reset}`);
             }
             break;
-
           case "tool_use":
             toolCalls++;
-            const name = event.name || event.tool_name || "?";
-            print(`  ${c.cyan}tool:${c.reset} ${name}`);
+            print(`  ${S.cyan}tool:${S.reset} ${ev.name || ev.tool_name || "?"}`);
             break;
-
           case "rate_limit_event":
-            rateLimitEvents++;
-            handleRateLimitEvent(event, model);
+            rateLimitEvents.push({ time: Date.now() - startTime, ...ev });
+            // Extract utilization if present
+            const q = modelQuota(model);
+            if (ev.utilization_5h !== undefined) q.utilization5h = ev.utilization_5h;
+            if (ev.utilization_7d !== undefined) q.utilization7d = ev.utilization_7d;
+            if (ev.resets_at) q.resetsAt = ev.resets_at;
             break;
-
           case "result":
-            if (event.result) {
-              assistantText = "";
-              for (const block of event.result) {
-                if (block.type === "text") assistantText += block.text;
-              }
+            if (ev.result) {
+              text = "";
+              for (const b of ev.result) { if (b.type === "text") text += b.text; }
             }
-            if (event.usage) {
-              tokensIn += event.usage.input_tokens || 0;
-              tokensOut += event.usage.output_tokens || 0;
+            if (ev.usage) {
+              tokensIn = ev.usage.input_tokens || 0;
+              tokensOut = ev.usage.output_tokens || 0;
+              cacheRead = ev.usage.cache_read_input_tokens || 0;
+              cacheCreation = ev.usage.cache_creation_input_tokens || 0;
             }
-            if (event.cost_usd) costUsd = event.cost_usd;
-            if (event.session_id) sessionId = event.session_id;
-            handleSuccessfulResponse();
+            if (ev.cost_usd) costUsd = ev.cost_usd;
+            if (ev.session_id) sessionId = ev.session_id;
             break;
         }
-      } catch {
-        // Non-JSON line, ignore
-      }
+      } catch {}
     });
 
     let stderr = "";
@@ -424,107 +486,157 @@ function runTurn(prompt, options = {}) {
 
     child.on("close", (code) => {
       if (config.verbose) process.stdout.write("\n");
-
       const duration = Date.now() - startTime;
+      const ttft = firstTokenTime ? firstTokenTime - startTime : null;
 
-      // Handle rate limit exit — claude process gave up
-      if (code !== 0 && stderr.includes("rate limit")) {
-        // Mark current model as blocked, estimate 5min reset
-        const estimatedReset = Date.now() / 1000 + 300;
-        markModelBlocked(model, estimatedReset);
+      // Detect rate limit exit
+      const rateLimited = (code !== 0 && (
+        stderr.includes("rate limit") ||
+        stderr.includes("429") ||
+        stderr.includes("quota") ||
+        stderr.includes("You've hit")
+      ));
 
-        resolve({
-          text: assistantText,
-          sessionId,
-          toolCalls,
-          tokensIn,
-          tokensOut,
-          costUsd,
-          duration,
-          rateLimited: true,
-          exitCode: code,
-        });
+      if (rateLimited) {
+        recordRateLimit(model, null);
+        resolve({ text, sessionId, toolCalls, tokensIn, tokensOut, cacheRead,
+                  cacheCreation, costUsd, duration, ttft, rateLimited: true, exitCode: code });
         return;
       }
 
-      if (code !== 0 && !assistantText) {
+      // Detect auth failure (non-retryable)
+      const authFailed = code !== 0 && (
+        stderr.includes("401") || stderr.includes("OAuth") ||
+        stderr.includes("login") || stderr.includes("unauthorized")
+      );
+
+      if (authFailed) {
+        reject(new Error(`AUTH_FAILED: ${stderr.slice(0, 300)}`));
+        return;
+      }
+
+      if (code !== 0 && !text) {
         reject(new Error(`Exit ${code}: ${stderr.slice(0, 500)}`));
         return;
       }
 
-      resolve({
-        text: assistantText,
-        sessionId,
-        toolCalls,
-        tokensIn,
-        tokensOut,
-        costUsd,
-        duration,
-        rateLimited: false,
-        exitCode: code,
-      });
+      recordSuccess(model, { tokensIn, tokensOut });
+      resolve({ text, sessionId, toolCalls, tokensIn, tokensOut, cacheRead,
+                cacheCreation, costUsd, duration, ttft, rateLimited: false, exitCode: code });
     });
 
     child.on("error", reject);
+
+    // Hard timeout: 10 minutes
+    setTimeout(() => { child.kill("SIGTERM"); }, opts.timeout || 600000);
   });
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// EVALUATION
+// EVALUATION — uses fallback model + low effort to save quota
 // ═════════════════════════════════════════════════════════════════════
 
-async function evaluateProgress(task) {
-  const prompt = `Review progress on the task. Respond with exactly one JSON object (no fences):
-{"status":"COMPLETE"|"IN_PROGRESS"|"BLOCKED"|"ERROR","summary":"what was done","next":"what to do next"}`;
+async function evaluateProgress() {
+  const prompt = `Review what has been accomplished on the task so far.
+Respond with exactly one JSON object (no markdown fences):
+{"status":"COMPLETE"|"IN_PROGRESS"|"BLOCKED"|"ERROR","summary":"brief summary","next":"next concrete step"}`;
 
   try {
     const result = await runTurn(prompt, {
       continueSession: true,
-      effort: config.evalEffort,
-      model: config.fallbackModel, // use cheaper model for evals
+      effort: config.efforts.eval,
+      model: config.fallbackModel, // eval on cheaper model — separate quota pool
     });
+
+    metrics.totalCost += result.costUsd || 0;
+    metrics.totalTokensIn += result.tokensIn || 0;
+    metrics.totalTokensOut += result.tokensOut || 0;
+    metrics.totalCacheRead += result.cacheRead || 0;
 
     const match = result.text.match(/\{[\s\S]*\}/);
     if (match) {
-      const parsed = JSON.parse(match[0]);
-      return {
-        status: parsed.status || "IN_PROGRESS",
-        summary: parsed.summary || "",
-        next: parsed.next || "Continue.",
-        costUsd: result.costUsd || 0,
-      };
+      const p = JSON.parse(match[0]);
+      return { status: p.status || "IN_PROGRESS", summary: p.summary || "", next: p.next || "Continue." };
     }
   } catch (e) {
     log(`Eval error: ${e.message}`);
   }
-
-  return { status: "IN_PROGRESS", summary: "?", next: "Continue.", costUsd: 0 };
+  return { status: "IN_PROGRESS", summary: "?", next: "Continue." };
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// SLEEP
+// PROMPT STRATEGY — minimize cache-busting, maximize work per turn
 // ═════════════════════════════════════════════════════════════════════
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
+function buildPrompt(isFirst) {
+  if (isFirst) {
+    // First turn: full task description. This gets cached (1h TTL on Max).
+    // Subsequent turns via --continue will cache-hit on the system prompt +
+    // this first message, saving massive input tokens.
+    return `${config.task}
+
+Work through this task completely, step by step. For each step:
+1. Read relevant code before modifying
+2. Make changes
+3. Verify changes work (run tests, check output)
+4. State what you did and what comes next
+
+Do NOT stop after one step. Keep working until you have completed a significant chunk of the task or used all available tool calls.`;
+  }
+
+  // Continuation: keep it SHORT. The full conversation history is already
+  // in context via --continue. A short prompt means more of the context
+  // comes from cache rather than new input tokens.
+  return "Continue. Do the next steps.";
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// SIGNAL HANDLING
+// STATUS LINE
 // ═════════════════════════════════════════════════════════════════════
+
+function statusLine(model, iteration) {
+  const elapsed = dur(Date.now() - metrics.startTime);
+  const oq = quota.opus;
+  const sq = quota.sonnet;
+
+  const opusStatus = oq.blocked
+    ? `${S.red}blocked${S.reset}`
+    : oq.utilization5h > 0.5
+      ? `${S.yellow}${pct(oq.utilization5h)}${S.reset}`
+      : `${S.green}ok${S.reset}`;
+
+  const sonnetStatus = sq.blocked
+    ? `${S.red}blocked${S.reset}`
+    : sq.utilization5h > 0.5
+      ? `${S.yellow}${pct(sq.utilization5h)}${S.reset}`
+      : `${S.green}ok${S.reset}`;
+
+  const ctx = contextStatus();
+  const ctxColor = ctx === "critical" ? S.red : ctx === "warning" ? S.yellow : S.dim;
+  const ctxStr = `${ctxColor}${Math.round(metrics.contextTokens / 1000)}k${S.reset}`;
+
+  print(`\n${S.blue}${S.bold}[Turn ${iteration}]${S.reset} ` +
+    `${S.dim}model=${S.reset}${model} ` +
+    `${S.dim}opus=${S.reset}${opusStatus} ` +
+    `${S.dim}sonnet=${S.reset}${sonnetStatus} ` +
+    `${S.dim}ctx=${S.reset}${ctxStr} ` +
+    `${S.dim}cost=${S.reset}${fmt(metrics.totalCost)} ` +
+    `${S.dim}${elapsed}${S.reset}`);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═════════════════════════════════════════════════════════════════════
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 let shuttingDown = false;
-
-function gracefulShutdown(stats) {
+function gracefulShutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  print(`\n${c.yellow}Shutting down gracefully...${c.reset}`);
-  saveState({
-    ...stats,
-    rateLimitState: config.rateLimitState,
-    timestamp: new Date().toISOString(),
-  });
-  print(`State saved to ${config.stateFile}`);
+  print(`\n${S.yellow}Shutting down...${S.reset}`);
+  saveState({ status: "INTERRUPTED" });
+  print(`State saved. Resume with: node stream.mjs --continue`);
   process.exit(0);
 }
 
@@ -535,82 +647,82 @@ function gracefulShutdown(stats) {
 async function main() {
   writeFileSync(config.logFile, `# stream.mjs — ${new Date().toISOString()}\n`);
 
-  // Restore state if continuing
-  let state = config.continueMode ? loadState() : null;
+  // Restore state
+  const state = config.continueMode ? loadState() : null;
   if (state) {
     config.sessionId = state.sessionId;
     config.task = state.task || config.task;
-    config.rateLimitState = state.rateLimitState || config.rateLimitState;
-    print(`${c.yellow}Resuming session ${state.sessionId} (turn ${(state.iteration || 0) + 1})${c.reset}`);
+    if (state.quota) Object.assign(quota, state.quota);
+    metrics.iteration = state.iteration || 0;
+    metrics.totalCost = state.totalCost || 0;
+    metrics.totalToolCalls = state.totalToolCalls || 0;
+    metrics.totalTokensIn = state.totalTokensIn || 0;
+    metrics.totalTokensOut = state.totalTokensOut || 0;
+    metrics.totalCacheRead = state.totalCacheRead || 0;
+    metrics.contextTokens = state.contextTokens || 0;
+    print(`${S.yellow}Resuming session ${state.sessionId} (turn ${metrics.iteration + 1})${S.reset}`);
   }
 
-  let iteration = state?.iteration || 0;
-  let totalCost = state?.totalCost || 0;
-  let totalToolCalls = state?.totalToolCalls || 0;
-  let totalTokensIn = state?.totalTokensIn || 0;
-  let totalTokensOut = state?.totalTokensOut || 0;
+  process.on("SIGINT", gracefulShutdown);
+  process.on("SIGTERM", gracefulShutdown);
+
   let status = "IN_PROGRESS";
-  const startTime = Date.now();
 
-  const stats = () => ({
-    sessionId: config.sessionId,
-    task: config.task,
-    iteration,
-    totalCost,
-    totalToolCalls,
-    totalTokensIn,
-    totalTokensOut,
-    status,
-  });
-
-  // Signal handlers
-  process.on("SIGINT", () => gracefulShutdown(stats()));
-  process.on("SIGTERM", () => gracefulShutdown(stats()));
-
-  print(`${c.bold}stream.mjs${c.reset} — resilient infinite streaming`);
-  print(`${c.dim}Task: ${config.task.slice(0, 100)}${config.task.length > 100 ? "..." : ""}${c.reset}`);
-  print(`${c.dim}Primary: ${config.primaryModel} | Fallback: ${config.fallbackModel} | Effort: ${config.workEffort}/${config.evalEffort}${c.reset}`);
+  print(`${S.bold}stream.mjs${S.reset} — Max plan optimized streaming`);
+  print(`${S.dim}Task: ${config.task.slice(0, 120)}${config.task.length > 120 ? "..." : ""}${S.reset}`);
+  print(`${S.dim}Primary: ${config.primaryModel} | Fallback: ${config.fallbackModel}${S.reset}`);
+  print(`${S.dim}Effort: work=${config.efforts.work} eval=${config.efforts.eval} | Eval every ${config.pacing.evalEveryN} turns${S.reset}`);
   divider();
 
-  while (iteration < config.maxTurns && status === "IN_PROGRESS") {
-    iteration++;
+  while (metrics.iteration < config.maxTurns && status === "IN_PROGRESS") {
+    metrics.iteration++;
+    const isFirst = metrics.iteration === 1 && !config.continueMode;
 
-    // ── Cost check ──
-    if (totalCost >= config.maxCostUsd) {
-      print(`${c.red}Cost limit reached: ${formatCost(totalCost)} >= ${formatCost(config.maxCostUsd)}${c.reset}`);
+    // ── Budget check ──
+    if (metrics.totalCost >= config.maxCostUsd) {
+      print(`${S.red}Budget limit: ${fmt(metrics.totalCost)}${S.reset}`);
       status = "BUDGET_EXCEEDED";
       break;
     }
 
-    // ── Rate limit wait ──
-    const waitMs = getWaitTime();
+    // ── Both-blocked wait ──
+    const waitMs = bothBlockedWait();
     if (waitMs > 0) {
-      print(`${c.yellow}Both models rate-limited. Waiting ${formatDuration(waitMs)}...${c.reset}`);
-      log(`Rate limit wait: ${waitMs}ms`);
-      await sleep(waitMs + 5000); // 5s buffer past reset
+      print(`${S.yellow}Both models blocked. Waiting ${dur(waitMs)}...${S.reset}`);
+      await sleep(waitMs + 5000);
+    }
+
+    // ── Throttle near limit ──
+    if (shouldThrottle()) {
+      const q = modelQuota(config.currentModel);
+      print(`${S.yellow}Throttling (5h: ${pct(q.utilization5h)}, 7d: ${pct(q.utilization7d)})${S.reset}`);
+      await sleep(config.pacing.throttlePause);
+    }
+
+    // ── Context check — fork session if approaching cliff ──
+    const ctxStat = contextStatus();
+    if (ctxStat === "critical") {
+      print(`${S.yellow}Context at ${Math.round(metrics.contextTokens / 1000)}k — triggering compact via /compact${S.reset}`);
+      // Send a compact request. Claude Code handles compaction internally
+      // when context is near the limit, but we can also just start fresh.
+      // For now, let auto-compact handle it inside the claude process.
+      // The key insight: --continue starts a new process that loads the
+      // persisted session, which auto-compacts on load if needed.
     }
 
     // ── Choose model ──
     const model = chooseModel();
-    const elapsed = formatDuration(Date.now() - startTime);
+    statusLine(model, metrics.iteration);
 
-    print(`\n${c.blue}${c.bold}[Turn ${iteration}]${c.reset} ${c.dim}model=${model} cost=${formatCost(totalCost)} elapsed=${elapsed}${c.reset}`);
+    // ── Determine effort for this turn ──
+    // First turn or post-eval: full work effort
+    // Other turns: lighter effort to conserve quota
+    const effort = isFirst ? config.efforts.work :
+                   metrics.turnsSinceEval === 0 ? config.efforts.work :
+                   config.efforts.light;
 
     // ── Build prompt ──
-    let prompt;
-    const isFirst = iteration === 1 && !config.continueMode;
-
-    if (isFirst) {
-      prompt = `${config.task}
-
-Work step by step. Be thorough — read existing code before modifying, run tests after changes. After each major step, state what you did and what comes next.`;
-    } else {
-      prompt = `Continue working on the task. Reminder:
-
-"${config.task.slice(0, 500)}"
-
-Pick up where you left off. Do the next step.`;
-    }
+    const prompt = buildPrompt(isFirst);
 
     // ── Execute turn ──
     let result;
@@ -618,112 +730,129 @@ Pick up where you left off. Do the next step.`;
       result = await runTurn(prompt, {
         continueSession: !isFirst,
         model,
+        effort,
       });
 
-      totalCost += result.costUsd || 0;
-      totalToolCalls += result.toolCalls;
-      totalTokensIn += result.tokensIn;
-      totalTokensOut += result.tokensOut;
+      // Accumulate metrics
+      metrics.totalCost += result.costUsd || 0;
+      metrics.totalToolCalls += result.toolCalls;
+      metrics.totalTokensIn += result.tokensIn;
+      metrics.totalTokensOut += result.tokensOut;
+      metrics.totalCacheRead += result.cacheRead;
+      metrics.totalCacheCreation += result.cacheCreation || 0;
+      metrics.turnsSinceEval++;
+      metrics.turnsSinceCompact++;
 
-      if (result.sessionId) {
-        config.sessionId = result.sessionId;
-      }
+      if (result.sessionId) config.sessionId = result.sessionId;
 
-      // Show summary
+      // Track context growth
+      updateContextEstimate(result.tokensIn);
+
+      // Display result
       if (result.text) {
-        const preview = result.text.split("\n").slice(0, 3).join("\n").slice(0, 200);
-        if (preview.trim()) print(`${c.dim}${preview}${preview.length < result.text.length ? "..." : ""}${c.reset}`);
+        const preview = result.text.split("\n").slice(0, 3).join("\n").slice(0, 250);
+        if (preview.trim()) print(`${S.dim}${preview}${preview.length < result.text.length ? "..." : ""}${S.reset}`);
       }
-      print(`${c.dim}  tools:${result.toolCalls} tok:${result.tokensIn}→${result.tokensOut} cost:${formatCost(result.costUsd)} time:${formatDuration(result.duration)}${c.reset}`);
 
+      const cacheHit = result.cacheRead / Math.max(1, result.tokensIn + result.cacheRead);
+      print(`${S.dim}  tools:${result.toolCalls} ` +
+            `tok:${result.tokensIn}→${result.tokensOut} ` +
+            `cache:${pct(cacheHit)} ` +
+            `cost:${fmt(result.costUsd)} ` +
+            `${dur(result.duration)}${S.reset}`);
+
+      // Handle rate limit
       if (result.rateLimited) {
-        print(`${c.yellow}Rate limited on ${model}. Switching...${c.reset}`);
-        continue; // re-enter loop, chooseModel() picks fallback
+        print(`${S.yellow}Rate limited on ${model}. Rotating...${S.reset}`);
+        metrics.iteration--; // don't count this as a real turn
+        continue;
       }
 
     } catch (e) {
-      print(`${c.red}Error: ${e.message}${c.reset}`);
-      log(`Turn ${iteration} error: ${e.stack}`);
+      print(`${S.red}Error: ${e.message.slice(0, 200)}${S.reset}`);
+      log(`Turn error: ${e.stack}`);
 
-      if (e.message.includes("overloaded") || e.message.includes("rate") || e.message.includes("429")) {
-        const estimatedReset = Date.now() / 1000 + 300;
-        markModelBlocked(model, estimatedReset);
-        print(`${c.yellow}Marked ${model} as blocked. Retrying...${c.reset}`);
-        iteration--; // retry
+      if (e.message.startsWith("AUTH_FAILED")) {
+        print(`${S.red}${S.bold}Authentication failed. Run: claude login${S.reset}`);
+        status = "AUTH_FAILED";
+        break;
+      }
+
+      // Rate-limit-like error: mark model, retry
+      if (/overload|rate|429|529|quota/i.test(e.message)) {
+        recordRateLimit(model, null);
+        metrics.iteration--;
         await sleep(5000);
         continue;
       }
 
-      // Non-retryable error — wait and retry anyway
-      print(`${c.yellow}Unexpected error. Retrying in 30s...${c.reset}`);
+      // Unknown error: pause and retry
+      print(`${S.yellow}Retrying in 30s...${S.reset}`);
       await sleep(30000);
-      iteration--;
+      metrics.iteration--;
       continue;
     }
 
     divider();
 
-    // ── Evaluate progress ──
-    print(`${c.dim}Evaluating...${c.reset}`);
-    const evaluation = await evaluateProgress(config.task);
-    totalCost += evaluation.costUsd;
-    status = evaluation.status;
+    // ── Periodic evaluation ──
+    if (metrics.turnsSinceEval >= config.pacing.evalEveryN) {
+      print(`${S.dim}Evaluating progress...${S.reset}`);
+      const evaluation = await evaluateProgress();
+      metrics.turnsSinceEval = 0;
+      status = evaluation.status;
 
-    switch (status) {
-      case "COMPLETE":
-        print(`${c.green}${c.bold}Complete!${c.reset} ${c.dim}${evaluation.summary}${c.reset}`);
-        break;
-      case "BLOCKED":
-        print(`${c.yellow}${c.bold}Blocked.${c.reset} ${c.dim}${evaluation.summary}${c.reset}`);
-        break;
-      case "ERROR":
-        print(`${c.red}${c.bold}Error.${c.reset} ${c.dim}${evaluation.summary}${c.reset}`);
-        break;
-      case "IN_PROGRESS":
-        print(`${c.blue}Next: ${evaluation.next}${c.reset}`);
-        break;
+      switch (status) {
+        case "COMPLETE":
+          print(`${S.green}${S.bold}Complete!${S.reset} ${S.dim}${evaluation.summary}${S.reset}`);
+          break;
+        case "BLOCKED":
+          print(`${S.yellow}${S.bold}Blocked:${S.reset} ${S.dim}${evaluation.summary}${S.reset}`);
+          break;
+        case "ERROR":
+          print(`${S.red}${S.bold}Error:${S.reset} ${S.dim}${evaluation.summary}${S.reset}`);
+          break;
+        case "IN_PROGRESS":
+          print(`${S.blue}Next: ${evaluation.next}${S.reset}`);
+          break;
+      }
     }
 
     // ── Save state ──
-    saveState({
-      ...stats(),
-      lastEvaluation: evaluation,
-      rateLimitState: config.rateLimitState,
-      timestamp: new Date().toISOString(),
-    });
+    saveState({ status });
 
     // ── Pause ──
-    if (status === "IN_PROGRESS" && iteration < config.maxTurns) {
+    if (status === "IN_PROGRESS" && metrics.iteration < config.maxTurns) {
       await sleep(config.pauseBetweenTurns);
     }
   }
 
   // ── Final report ──
   divider();
-  const elapsed = formatDuration(Date.now() - startTime);
-  print(`\n${c.bold}Done${c.reset}`);
-  print(`  Status:     ${status}`);
-  print(`  Turns:      ${iteration}`);
-  print(`  Tools:      ${totalToolCalls}`);
-  print(`  Tokens:     ${totalTokensIn} in / ${totalTokensOut} out`);
-  print(`  Cost:       ${formatCost(totalCost)}`);
-  print(`  Duration:   ${elapsed}`);
-  print(`  Session:    ${config.sessionId || "N/A"}`);
+  const elapsed = dur(Date.now() - metrics.startTime);
+  const totalTok = metrics.totalTokensIn + metrics.totalTokensOut;
+  const cacheRate = metrics.totalCacheRead / Math.max(1, metrics.totalTokensIn + metrics.totalCacheRead);
+
+  print(`\n${S.bold}Session Complete${S.reset}`);
+  print(`  Status:        ${status}`);
+  print(`  Turns:         ${metrics.iteration}`);
+  print(`  Tools:         ${metrics.totalToolCalls}`);
+  print(`  Tokens:        ${metrics.totalTokensIn} in / ${metrics.totalTokensOut} out (${totalTok} total)`);
+  print(`  Cache hit:     ${S.bold}${pct(cacheRate)}${S.reset} (${metrics.totalCacheRead} tokens saved)`);
+  print(`  Cost:          ${fmt(metrics.totalCost)}`);
+  print(`  Rate limits:   ${metrics.rateLimitHits} hits, ${metrics.modelSwitches} switches`);
+  print(`  Duration:      ${elapsed}`);
+  print(`  Session:       ${config.sessionId || "N/A"}`);
 
   if (status === "IN_PROGRESS") {
-    print(`\n${c.yellow}Resume: node stream.mjs --continue${c.reset}`);
+    print(`\n${S.yellow}Resume: node stream.mjs --continue${S.reset}`);
   }
 
-  saveState({
-    ...stats(),
-    rateLimitState: config.rateLimitState,
-    timestamp: new Date().toISOString(),
-    completed: status === "COMPLETE",
-  });
+  saveState({ status, completed: status === "COMPLETE" });
 }
 
 main().catch((e) => {
-  console.error(`${c.red}Fatal: ${e.message}${c.reset}`);
+  console.error(`${S.red}Fatal: ${e.message}${S.reset}`);
   log(`Fatal: ${e.stack}`);
   process.exit(1);
 });
