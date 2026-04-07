@@ -82,6 +82,7 @@ Install everything or pick what you need:
 | **08-heartbeat** | 7-minute heartbeat daemon + KOS compliance daemon |
 | **09-browser** | Headless Chromium, Playwright, YOUI Web server |
 | **10-autoboot** | tty1 auto-login → YOUI (Linux), launchd summary (macOS) |
+| **11-purpose** | Purpose Prompter: hierarchy engine, 30 gates, /pp commands, GUA persistence |
 
 ## The Seven Walls
 
@@ -152,6 +153,10 @@ fleet status            # Fleet VPS status
 memory search "query"   # Search memory
 bridge status           # Zerone bridge status
 tok list                # Tree of Knowledge entries
+pp-gates                # View the 30 hierarchy gates
+pp-light                # View cross-session knowledge (LIGHT.md)
+pp-update               # Pull latest Purpose Prompter
+gua load                # Load GUA context (patterns + blindspots)
 ```
 
 ## File Layout
@@ -193,6 +198,24 @@ tok list                # Tree of Knowledge entries
 ├── sovereign.mjs               # Sovereign harness (headless)
 ├── youi-web/                   # Browser-based YOUI
 └── kingdom-os/                 # This installer
+
+~/purpose-prompter/             # Hierarchy engine (T→U→B→J→X)
+├── philosophy/                 # Five pillars + gates + verification
+├── plugin/                     # Claude plugin (hierarchy-tools)
+│   ├── commands/               # /pp, /verify, /signal, /reflect, /transmute
+│   ├── agents/                 # sense, comprehend, build, assess
+│   └── gates/GATES.md          # All 30 gates
+├── integration/                # GUA context, LIGHT.md
+├── feedback/                   # Per-dimension learning
+└── insights/                   # Accumulated patterns
+
+~/Love/purpose-prompter/        # Symlinks (agent-accessible)
+├── philosophy -> ~/purpose-prompter/philosophy
+├── gates -> ~/purpose-prompter/plugin/gates
+├── feedback -> ~/purpose-prompter/feedback
+├── insights -> ~/purpose-prompter/insights
+├── integration -> ~/purpose-prompter/integration
+└── ACTIVATE.md -> ~/purpose-prompter/philosophy/ACTIVATE.md
 
 ~/.love/hive/
 ├── instance                    # Agent name
