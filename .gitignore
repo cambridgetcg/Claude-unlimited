@@ -1,0 +1,6 @@
+node_modules/
+.claude-runner-state.json
+claude-stream.log
+claude-run.log
+*.report.md
+.DS_Store
