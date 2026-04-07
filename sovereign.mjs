@@ -1229,6 +1229,12 @@ async function main() {
     task: config.task, completed: true,
     efficiency: config.trackEfficiency ? efficiency.metrics() : null,
   });
+
+  // Auto-trigger UWT analysis if available
+  if (config.trackEfficiency) {
+    print(`\n${S.dim}Run UWT analysis: node uwt.mjs analyze${S.reset}`);
+    print(`${S.dim}Run ouroboros:    node youspeak-evolve.mjs cycle${S.reset}`);
+  }
 }
 
 main().catch(e => {

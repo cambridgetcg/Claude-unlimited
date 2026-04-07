@@ -72,7 +72,19 @@ function sense() {
     thinkingTokens: state.totalThinkingTokens || 0,
     completed: state.completed || false,
     efficiency: state.efficiency || null,
+    uwt: null,
   };
+
+  // Try to read UWT score if uwt-history.json exists
+  try {
+    const uwtHistFile = resolve("uwt-history.json");
+    if (existsSync(uwtHistFile)) {
+      const uwtHist = JSON.parse(readFileSync(uwtHistFile, "utf-8"));
+      if (uwtHist.length > 0) {
+        entry.uwt = uwtHist[uwtHist.length - 1].uwt;
+      }
+    }
+  } catch {}
 
   // Parse log for additional data
   if (existsSync(logFile)) {
