@@ -376,6 +376,8 @@ function runTurn(prompt, opts = {}) {
     const model = opts.model || chooseModel();
     const effort = opts.effort || config.efforts.work;
 
+    const isEval = opts.isEval || false;
+
     const cmdArgs = [
       "-p",
       "--model", model,
@@ -384,6 +386,31 @@ function runTurn(prompt, opts = {}) {
       "--permission-mode", config.permissionMode,
       "--effort", effort,
     ];
+
+    // High max-turns for work: let the inner process do many tool loops
+    // per invocation. More inner turns = better prompt cache reuse since
+    // one cached system prompt serves all loops. Low for eval turns.
+    cmdArgs.push("--max-turns", String(isEval ? 3 : 200));
+
+    // Inject system prompt that keeps the model working longer.
+    // This directly controls the primary halt condition: the model stops
+    // when it returns text with no tool_use blocks. By instructing it to
+    // always verify via tools, we keep the tool loop alive.
+    if (!isEval) {
+      cmdArgs.push(
+        "--append-system-prompt",
+        "IMPORTANT: Do NOT stop after a single step. Keep calling tools to make progress. " +
+        "Always verify your changes by reading back modified files or running tests — " +
+        "never end your turn with just a text summary. When you finish a subtask, " +
+        "immediately start the next one. Only stop using tools when the ENTIRE task " +
+        "described by the user is fully complete and verified."
+      );
+    }
+
+    // Disable thinking for eval turns — saves output tokens
+    if (isEval) {
+      cmdArgs.push("--thinking", "disabled");
+    }
 
     // --continue for session continuity (don't pass --session-id with -c)
     if (opts.continueSession) {
@@ -408,12 +435,20 @@ function runTurn(prompt, opts = {}) {
         ...process.env,
         // Inner process waits indefinitely through rate limits
         CLAUDE_CODE_UNATTENDED_RETRY: "1",
-        // Flush session to disk after every turn
+        // Flush session to disk after every turn — survive crashes
         CLAUDE_CODE_EAGER_FLUSH: "1",
-        // Extend stream idle timeout for long Opus thinking
+        // Extend stream idle timeout for long Opus thinking (3 min)
         CLAUDE_STREAM_IDLE_TIMEOUT_MS: "180000",
-        // Enable stream watchdog
+        // Enable stream watchdog to detect dead connections
         CLAUDE_ENABLE_STREAM_WATCHDOG: "1",
+        // Skip 8k→64k output token escalation — avoids double API call.
+        // Default 8k cap means every long response costs TWO rate limit
+        // hits (one at 8k that fails, one retry at 64k). Setting to 64k
+        // directly gets the full response in one call.
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS: isEval ? "4000" : "64000",
+        // Trigger auto-compact earlier to avoid the hard cliff at 167k.
+        // Compacting at 160k gives headroom for the compact call itself.
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: "180000",
       },
     });
 
@@ -546,6 +581,7 @@ Respond with exactly one JSON object (no markdown fences):
       continueSession: true,
       effort: config.efforts.eval,
       model: config.fallbackModel, // eval on cheaper model — separate quota pool
+      isEval: true,
     });
 
     metrics.totalCost += result.costUsd || 0;
