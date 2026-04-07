@@ -1,6 +1,10 @@
 node_modules/
 .claude-runner-state.json
+.sovereign-state.json
+.sub-harness-state.json
 claude-stream.log
 claude-run.log
+sovereign.log
+subscription-harness.log
 *.report.md
 .DS_Store
