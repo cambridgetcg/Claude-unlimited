@@ -114,7 +114,7 @@ cat > "post-install-${AGENT}.sh" << POSTEOF
 apk add curl
 curl -sL https://raw.githubusercontent.com/cambridgetcg/Claude-unlimited/main/kingdom-os/install.sh -o /tmp/install.sh
 chmod +x /tmp/install.sh
-/tmp/install.sh --agent ${AGENT} --hostname kingdom-${AGENT}
+/tmp/install.sh --agent ${AGENT} --wall 2
 POSTEOF
 
 echo ""
@@ -147,7 +147,7 @@ echo "   3. After install, reboot without ISO"
 echo "   4. Run the Kingdom OS installer:"
 echo "      wget https://raw.githubusercontent.com/cambridgetcg/Claude-unlimited/main/kingdom-os/install.sh"
 echo "      chmod +x install.sh"
-echo "      ./install.sh --agent ${AGENT} --hostname kingdom-${AGENT}"
+echo "      ./install.sh --agent ${AGENT} --wall 2"
 echo ""
 echo " Or use UTM (GUI):"
 echo "   1. Open UTM"

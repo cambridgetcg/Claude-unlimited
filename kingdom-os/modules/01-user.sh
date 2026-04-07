@@ -1,72 +1,49 @@
 #!/bin/sh
 # ── Module 01: Kingdom User ─────────────────────────────────────────
-# Creates the kingdom user and configures shell environment.
-
 set -e
-
-KINGDOM_USER="${KINGDOM_USER:-kingdom}"
-AGENT="${AGENT:-alpha}"
+. "$(dirname "$0")/_common.sh"
 
 echo "[01-user] Setting up user '${KINGDOM_USER}'..."
-
-PLATFORM=$([ -f /etc/alpine-release ] && echo "alpine" || ([ -f /etc/debian_version ] && echo "debian" || echo "macos"))
 
 case "$PLATFORM" in
   alpine|debian)
     if ! id "${KINGDOM_USER}" >/dev/null 2>&1; then
-      adduser -D -s /bin/bash -h "/home/${KINGDOM_USER}" "${KINGDOM_USER}" 2>/dev/null || \
+      adduser -D -s /bin/bash -h "${HOME_DIR}" "${KINGDOM_USER}" 2>/dev/null || \
       useradd -m -s /bin/bash "${KINGDOM_USER}"
       echo "${KINGDOM_USER}:$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)" | chpasswd
-      if command -v adduser >/dev/null 2>&1; then
-        adduser "${KINGDOM_USER}" wheel 2>/dev/null || adduser "${KINGDOM_USER}" sudo 2>/dev/null || true
-      fi
+      adduser "${KINGDOM_USER}" wheel 2>/dev/null || adduser "${KINGDOM_USER}" sudo 2>/dev/null || true
     fi
-    # doas/sudo without password for wheel
     if command -v doas >/dev/null 2>&1; then
       mkdir -p /etc/doas.d
       echo "permit nopass :wheel" > /etc/doas.d/wheel.conf
     fi
     ;;
-  macos)
-    # macOS — user already exists, just configure
-    KINGDOM_USER="$(whoami)"
-    ;;
 esac
-
-HOME_DIR=$(eval echo "~${KINGDOM_USER}")
 
 # Shell profile
 cat > "${HOME_DIR}/.kingdom_profile" << PROFILEEOF
-# Kingdom OS Shell Profile — sourced on login
+# Kingdom OS Shell Profile
 [ -f ~/.kingdom ] && . ~/.kingdom
-
 export LOVE_HOME="\${LOVE_DIR:-\$HOME/Love}"
 export PATH="\${LOVE_HOME}/tools:\${UNLIMITED_DIR:-\$HOME/Claude-unlimited}:\$PATH"
 export NODE_NO_WARNINGS=1
 export KINGDOM_AGENT="\${AGENT:-${AGENT}}"
-export KINGDOM_WALL="\${WALL:-7}"
+export KINGDOM_WALL="\${WALL:-${WALL}}"
 
-# Aliases
 alias kos="python3 \$LOVE_HOME/tools/kos.py"
 alias hive="python3 \$LOVE_HOME/hive/hive.py"
 alias fleet="python3 \$LOVE_HOME/tools/fleet.py"
+alias memory="python3 \$LOVE_HOME/tools/memory.py"
 alias youi="node \${UNLIMITED_DIR:-\$HOME/Claude-unlimited}/youi.mjs --agent \$KINGDOM_AGENT --workdir \$LOVE_HOME --soul-dir \$LOVE_HOME"
 alias sovereign="node \${UNLIMITED_DIR:-\$HOME/Claude-unlimited}/sovereign.mjs --soul-dir \$LOVE_HOME"
-alias memory="python3 \$LOVE_HOME/tools/memory.py"
-alias bridge="python3 \$LOVE_HOME/tools/bridge.py"
-alias tok="python3 \$LOVE_HOME/tools/tok.py"
 PROFILEEOF
 
-# Source from bash/zsh profiles
+# Source from login shells
 for rc in "${HOME_DIR}/.bashrc" "${HOME_DIR}/.zshrc" "${HOME_DIR}/.bash_profile" "${HOME_DIR}/.zprofile"; do
-  if [ -f "$rc" ] || [ "$PLATFORM" != "macos" ]; then
-    touch "$rc"
-    if ! grep -q "kingdom_profile" "$rc" 2>/dev/null; then
-      echo '[ -f ~/.kingdom_profile ] && . ~/.kingdom_profile' >> "$rc"
-    fi
-  fi
+  [ -f "$rc" ] || [ "$PLATFORM" != "macos" ] || continue
+  touch "$rc"
+  grep -q "kingdom_profile" "$rc" 2>/dev/null || echo '[ -f ~/.kingdom_profile ] && . ~/.kingdom_profile' >> "$rc"
 done
 
-chown -R "${KINGDOM_USER}:" "${HOME_DIR}/.kingdom_profile" 2>/dev/null || true
-
-echo "[01-user] Done. User: ${KINGDOM_USER}, Home: ${HOME_DIR}"
+chown "${KINGDOM_USER}:" "${HOME_DIR}/.kingdom_profile" 2>/dev/null || true
+echo "[01-user] Done."

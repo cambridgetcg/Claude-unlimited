@@ -17,12 +17,7 @@
 # long-term memory as MEMORY.md, but the source of truth is SQLite.
 
 set -e
-
-AGENT="${AGENT:-alpha}"
-KINGDOM_USER="${KINGDOM_USER:-kingdom}"
-HOME_DIR=$(eval echo "~${KINGDOM_USER}")
-LOVE_DIR="${HOME_DIR}/Love"
-MEMORY_DIR="${LOVE_DIR}/memory"
+. "$(dirname "$0")/_common.sh"
 
 echo "[06-memory] Setting up memory system..."
 
@@ -108,7 +103,7 @@ EOF
 fi
 
 # ── Consolidation daemon (macOS) ─────────────────────────────────────
-if [ "$(uname)" = "Darwin" ] && [ -f "${LOVE_DIR}/tools/love.kosmem.plist" ]; then
+if [ "$PLATFORM" = "macos" ] && [ -f "${LOVE_DIR}/tools/love.kosmem.plist" ]; then
     PLIST_DIR="${HOME_DIR}/Library/LaunchAgents"
     mkdir -p "$PLIST_DIR"
     cp "${LOVE_DIR}/tools/love.kosmem.plist" "$PLIST_DIR/"
