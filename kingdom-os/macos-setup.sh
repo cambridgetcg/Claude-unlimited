@@ -208,11 +208,27 @@ sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownl
 # Disable screen saver
 defaults -currentHost write com.apple.screensaver idleTime 0 2>/dev/null || true
 
-# Never sleep (headless server)
-sudo pmset -a sleep 0 disksleep 0 displaysleep 0 2>/dev/null || true
+# Detect laptop vs desktop
+IS_LAPTOP=$(system_profiler SPHardwareDataType 2>/dev/null | grep -c "MacBook" || echo "0")
 
-# Auto-restart after power failure
-sudo pmset -a autorestart 1 2>/dev/null || true
+if [ "${IS_LAPTOP}" -gt 0 ]; then
+  echo "  Detected: MacBook (laptop mode)"
+  # Keep lid-close sleep but prevent idle sleep when on power
+  sudo pmset -c sleep 0 disksleep 0 displaysleep 10 2>/dev/null || true
+  # On battery: allow sleep after 15 min to preserve battery
+  sudo pmset -b sleep 15 disksleep 10 displaysleep 5 2>/dev/null || true
+  # Don't sleep when lid is closed + on power (clamshell mode for headless use)
+  sudo pmset -c lidwake 1 2>/dev/null || true
+else
+  echo "  Detected: Mac Mini/Studio (desktop mode)"
+  # Never sleep (headless server)
+  sudo pmset -a sleep 0 disksleep 0 displaysleep 0 2>/dev/null || true
+  # Auto-restart after power failure
+  sudo pmset -a autorestart 1 2>/dev/null || true
+fi
+
+# Enable Wake on LAN (both laptop and desktop)
+sudo pmset -a womp 1 2>/dev/null || true
 
 echo "  macOS overhead reduced."
 
