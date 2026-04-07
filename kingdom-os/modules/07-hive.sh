@@ -1,75 +1,123 @@
 #!/bin/sh
 # ── Module 07: HIVE Communication ───────────────────────────────────
+# The nervous system of Kingdom OS.
+#
+# Architecture:
+#   NATS (JetStream) on Sentry → SSH tunnel → localhost:4222
+#   NaCl/XSalsa20-Poly1305 encryption (shared key)
+#   Wall-based channel ACL (Law of Sight)
+#   Messages auto-stored in kosmem
+#
+# Components:
+#   hive.py     Transport layer (NATS pub/sub + encryption)
+#   koshive.py  Kingdom OS integration (kosmem, presence, tasks)
+#   SSH tunnel  Persistent connection to Sentry NATS
+#
+# What this module does:
+#   1. Creates HIVE identity (instance name in ~/.love/hive/)
+#   2. Sets up SSH tunnel to Sentry (launchd on macOS, OpenRC on Linux)
+#   3. Tests connectivity
+#   4. Creates koshive alias
+#
+# Prerequisites:
+#   Module 03 (identity) — sets ~/.love/hive/instance
+#   Module 04 (keys)     — sets ~/.love/hive/key + SSH key
+# ─────────────────────────────────────────────────────────────────────
 set -e
 . "$(dirname "$0")/_common.sh"
 
-echo "[07-hive] Setting up HIVE (${PLATFORM})..."
+echo "[07-hive] Setting up HIVE communication..."
 
-[ ! -f "${HIVE_DIR}/instance" ] && { echo "  ERROR: Run module 03 first"; exit 1; }
+# Verify prerequisites
+[ ! -f "${HIVE_DIR}/instance" ] && { echo "  ERROR: Run module 03 first (no HIVE instance)"; exit 1; }
+[ ! -f "${HIVE_DIR}/key" ] && echo "  WARNING: No HIVE encryption key — messages won't be encrypted"
 
+INSTANCE=$(cat "${HIVE_DIR}/instance")
+echo "  Instance: ${INSTANCE}"
+
+# ── Create message log directory ──
+ensure_dir "${MEMORY_DIR}/hive"
+
+# ── SSH tunnel to Sentry NATS ──
 case "$PLATFORM" in
   macos)
     ensure_dir "$PLIST_DIR"
-    cat > "${PLIST_DIR}/love.${AGENT}.tunnel.plist" << PLISTEOF
+
+    # Check if autossh is available (preferred), fall back to ssh
+    if command -v autossh >/dev/null 2>&1; then
+        SSH_CMD="/opt/homebrew/bin/autossh"
+        SSH_ARGS="-M 0 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -N -L 4222:127.0.0.1:4222 root@${SENTRY_IP}"
+    else
+        SSH_CMD="/usr/bin/ssh"
+        SSH_ARGS="-N -L 4222:localhost:4222 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes root@${SENTRY_IP}"
+    fi
+
+    cat > "${PLIST_DIR}/love.${AGENT}.hive-tunnel.plist" << PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>love.${AGENT}.tunnel</string>
+    <string>love.${AGENT}.hive-tunnel</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/ssh</string>
-        <string>-N</string>
-        <string>-L</string>
-        <string>4222:localhost:4222</string>
-        <string>-o</string>
-        <string>StrictHostKeyChecking=accept-new</string>
-        <string>-o</string>
-        <string>ServerAliveInterval=30</string>
-        <string>-o</string>
-        <string>ServerAliveCountMax=3</string>
-        <string>-o</string>
-        <string>ExitOnForwardFailure=yes</string>
-        <string>root@${SENTRY_IP}</string>
+$(echo "$SSH_CMD $SSH_ARGS" | tr ' ' '\n' | while read arg; do echo "        <string>$arg</string>"; done)
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardErrorPath</key>
-    <string>/tmp/hive-tunnel-stderr.log</string>
+    <string>/tmp/hive-tunnel.log</string>
+    <key>StandardOutPath</key>
+    <string>/tmp/hive-tunnel.log</string>
     <key>ThrottleInterval</key>
-    <integer>30</integer>
+    <integer>10</integer>
 </dict>
 </plist>
 PLISTEOF
-    echo "  Tunnel plist: ${PLIST_DIR}/love.${AGENT}.tunnel.plist"
+    echo "  Tunnel plist: love.${AGENT}.hive-tunnel"
     ;;
+
   alpine|debian)
     cat > /etc/init.d/kingdom-hive << SVCEOF
 #!/sbin/openrc-run
-description="Kingdom HIVE SSH tunnel to NATS"
+name="Kingdom HIVE tunnel"
+description="SSH tunnel to NATS on Sentry for inter-agent communication"
 command="/usr/bin/ssh"
-command_args="-N -L 4222:localhost:4222 root@${SENTRY_IP} -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes"
+command_args="-N -L 4222:localhost:4222 root@${SENTRY_IP} -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o BatchMode=yes"
 command_user="${KINGDOM_USER}"
 pidfile="/run/kingdom-hive.pid"
 command_background=true
-depend() { need net; after sshd; }
+
+depend() {
+    need net
+    after sshd
+}
 SVCEOF
     chmod +x /etc/init.d/kingdom-hive
     rc-update add kingdom-hive default 2>/dev/null || true
-    echo "  HIVE tunnel service installed"
+    echo "  HIVE tunnel: OpenRC service installed"
     ;;
 esac
 
-# Connectivity test
+# ── Ensure use-tunnel flag exists ──
+touch "${HIVE_DIR}/use-tunnel"
+echo "  Tunnel mode: enabled (localhost:4222 → Sentry NATS)"
+
+# ── Connectivity test ──
 if command -v nc >/dev/null 2>&1; then
-  if nc -z -w3 localhost 4222 2>/dev/null; then
-    echo "  HIVE: CONNECTED"
-  else
-    echo "  HIVE: not connected (start tunnel first)"
-  fi
+    if nc -z -w3 localhost 4222 2>/dev/null; then
+        echo "  NATS: ✓ CONNECTED (localhost:4222)"
+    else
+        echo "  NATS: not yet connected (start tunnel or reboot)"
+    fi
 fi
 
-echo "[07-hive] Done."
+# ── Test HIVE messaging ──
+if [ -f "${LOVE_DIR}/hive/hive.py" ] && [ -f "${HIVE_DIR}/key" ]; then
+    RESULT=$(python3 "${LOVE_DIR}/hive/hive.py" test 2>&1 | tail -1)
+    echo "  Test: ${RESULT}"
+fi
+
+echo "[07-hive] Done. Communication layer active."
