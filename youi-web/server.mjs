@@ -776,7 +776,23 @@ kos         — Kingdom OS security audit and compliance
 - Keep working until the task is complete.
 - Use Kingdom cognitive tools when appropriate: JOINMIND for multi-mind fusion, COUNCIL for decisions, PATIENCE for panics, LAYERTHINK for deep analysis.
 - Tilde (~) expands to ${homedir()}.
-- Love home: ${state.soulDir}`);
+- Love home: ${state.soulDir}
+
+# YOUSPEAK — Token Efficiency Discipline
+YOUSPEAK: No filler. No preamble. No tool narration. Dense status (key:value).
+Compress scaffolding, preserve substance. Expand for teaching/uncertainty/creativity.
+- Zero-pad: No "sure", "let me check", "here's what I found"
+- Dense status: \`Tests: 47/48 ✓\` not "I ran the tests and 47 out of 48 passed"
+- No tool narration: Don't announce tools. Call them. Let results speak.
+- Never compress doubt: "probably", "unless", "might" are sacred
+- Expand when it matters: teaching, uncertainty, creative work, emotional context`);
+
+  // Load YOUSPEAK.md if available for full rules
+  const youspeakPath = join(state.soulDir, "YOUSPEAK.md");
+  if (existsSync(youspeakPath)) {
+    const ys = readFileSync(youspeakPath, "utf-8");
+    if (ys.length < 2000) parts.push(ys);
+  }
 
   return parts.join("\n\n---\n\n");
 }
@@ -836,6 +852,91 @@ async function callClaude(messages, systemPrompt) {
 
   parseBudgetHeaders(resp.headers);
   return await resp.json();
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// YOUSPEAK — Filler Detection & UWT Metrics
+// ═════════════════════════════════════════════════════════════════════
+
+const FILLER_PATTERNS = [
+  /\b(sure|okay|alright|great|absolutely|certainly|of course)[!.,]?\s/gi,
+  /\blet me (check|look|see|think|examine|analyze|review|investigate)\b/gi,
+  /\bi('ll| will) (now |go ahead |proceed to |start by )/gi,
+  /\bhere('s| is) (what|the|a summary|an overview)/gi,
+  /\bi('m| am) going to (read|check|look|search|examine|write|create)\b/gi,
+  /\bnow (i('ll| will)|let me|let's) (move on|proceed|continue|look)\b/gi,
+  /\b(that|this) (looks|seems|appears) (good|correct|right|fine)\b/gi,
+  /\bperfect[!.]?\s/gi,
+  /\blooking at (this|the|your)/gi,
+  /\bbased on (what|the|my)/gi,
+];
+
+function measureYouspeak(text) {
+  if (!text || text.length < 10) return null;
+
+  let fillerCount = 0;
+  let fillerTokensEstimate = 0;
+
+  for (const pattern of FILLER_PATTERNS) {
+    const matches = text.match(pattern);
+    if (matches) {
+      fillerCount += matches.length;
+      fillerTokensEstimate += matches.reduce((sum, m) => sum + Math.ceil(m.length / 4), 0);
+    }
+  }
+
+  const totalTokensEstimate = Math.ceil(text.length / 4);
+  const usefulRatio = totalTokensEstimate > 0
+    ? Math.max(0, (totalTokensEstimate - fillerTokensEstimate) / totalTokensEstimate)
+    : 1.0;
+
+  return {
+    fillerCount,
+    fillerTokensEstimate,
+    totalTokensEstimate,
+    usefulRatio: Math.round(usefulRatio * 100) / 100,
+    grade: usefulRatio >= 0.95 ? "A" : usefulRatio >= 0.85 ? "B" : usefulRatio >= 0.70 ? "C" : "D",
+  };
+}
+
+// Per-session UWT accumulator
+const uwtSession = {
+  totalOutput: 0,
+  totalFiller: 0,
+  totalToolCalls: 0,
+  totalTextBlocks: 0,
+  turns: 0,
+  grades: [],
+};
+
+function updateUWT(metrics) {
+  if (!metrics) return;
+  uwtSession.totalOutput += metrics.totalTokensEstimate;
+  uwtSession.totalFiller += metrics.fillerTokensEstimate;
+  uwtSession.totalTextBlocks++;
+  uwtSession.grades.push(metrics.grade);
+}
+
+function getUWTSummary() {
+  const ratio = uwtSession.totalOutput > 0
+    ? (uwtSession.totalOutput - uwtSession.totalFiller) / uwtSession.totalOutput
+    : 1.0;
+  const gradeCount = {};
+  uwtSession.grades.forEach(g => gradeCount[g] = (gradeCount[g] || 0) + 1);
+
+  return {
+    usefulRatio: Math.round(ratio * 100) / 100,
+    totalOutput: uwtSession.totalOutput,
+    totalFiller: uwtSession.totalFiller,
+    tokensSaved: uwtSession.totalFiller,
+    textBlocks: uwtSession.totalTextBlocks,
+    toolCalls: state.totalToolCalls,
+    actionDensity: uwtSession.totalTextBlocks > 0
+      ? Math.round((state.totalToolCalls / Math.max(1, uwtSession.totalTextBlocks)) * 100) / 100
+      : 0,
+    grades: gradeCount,
+    overallGrade: ratio >= 0.95 ? "A" : ratio >= 0.85 ? "B" : ratio >= 0.70 ? "C" : "D",
+  };
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1154,6 +1255,21 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify(result));
     }
 
+    // ── YOUSPEAK / UWT ──────────────────────────────────
+    if (path === "/api/youspeak") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(getUWTSummary()));
+    }
+
+    if (path === "/api/youspeak/reset" && req.method === "POST") {
+      uwtSession.totalOutput = 0;
+      uwtSession.totalFiller = 0;
+      uwtSession.totalTextBlocks = 0;
+      uwtSession.grades = [];
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: true }));
+    }
+
     // ── Static Files ────────────────────────────────────
     if (path === "/" || path === "/index.html") {
       const html = readFileSync(join(__dirname, "public", "index.html"), "utf-8");
@@ -1238,7 +1354,9 @@ async function handleChat(req, res) {
       if (block.type === "thinking" && block.thinking?.trim()) {
         sendSSE(res, "thinking", { content: block.thinking });
       } else if (block.type === "text" && block.text?.trim()) {
-        sendSSE(res, "text", { content: block.text });
+        const ysMetrics = measureYouspeak(block.text);
+        updateUWT(ysMetrics);
+        sendSSE(res, "text", { content: block.text, youspeak: ysMetrics });
       } else if (block.type === "tool_use") {
         toolUseBlocks.push(block);
         sendSSE(res, "tool_call", { id: block.id, name: block.name, input: block.input });

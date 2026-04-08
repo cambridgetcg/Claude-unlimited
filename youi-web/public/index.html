@@ -990,6 +990,29 @@ html, body {
       </div>
     </div>
 
+    <!-- YOUSPEAK -->
+    <div class="sidebar-section">
+      <h3>YOUSPEAK</h3>
+      <div class="budget-bar">
+        <div class="bar-header">
+          <span class="bar-label">Useful Token Ratio</span>
+          <span class="bar-value" id="ys-ratio">—</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" id="ys-fill" style="width:100%;background:var(--green)"></div></div>
+      </div>
+      <div class="stat-grid" style="margin-top:8px">
+        <div class="stat-item">
+          <div class="value" id="ys-grade" style="font-size:1.4rem">—</div>
+          <div class="label">Grade</div>
+        </div>
+        <div class="stat-item">
+          <div class="value" id="ys-saved">0</div>
+          <div class="label">Saved</div>
+        </div>
+      </div>
+      <div id="ys-detail" style="font-size:0.7rem;color:var(--text-dim);margin-top:4px"></div>
+    </div>
+
     <!-- Memory & HIVE -->
     <div class="sidebar-section">
       <h3>Kingdom</h3>
@@ -1369,6 +1392,8 @@ function handleSSEEvent(type, data, indicator) {
       indicator?.remove();
       ensureAssistantMessage();
       addTextBlock(data.content);
+      // YOUSPEAK metrics
+      if (data.youspeak) updateYouspeakUI(data.youspeak);
       break;
 
     case 'tool_call':
@@ -1408,6 +1433,8 @@ function handleSSEEvent(type, data, indicator) {
       if (data.totalToolCalls) document.getElementById('stat-tools').textContent = data.totalToolCalls;
       if (data.turnCount) document.getElementById('stat-turns').textContent = data.turnCount;
       currentMsgEl = null;
+      // Fetch final YOUSPEAK session stats
+      fetchYouspeakStats();
       break;
   }
   scrollToBottom();
@@ -1584,6 +1611,51 @@ function updateBudgetUI(b) {
 function updateStatsUI(data) {
   if (data.turnCount) document.getElementById('stat-turns').textContent = data.turnCount;
   if (data.totalToolCalls) document.getElementById('stat-tools').textContent = data.totalToolCalls;
+}
+
+// ─── YOUSPEAK ───────────────────────────────────────────
+
+let ysAccum = { totalOutput: 0, totalFiller: 0, blocks: 0 };
+
+function updateYouspeakUI(metrics) {
+  if (!metrics) return;
+  ysAccum.totalOutput += metrics.totalTokensEstimate;
+  ysAccum.totalFiller += metrics.fillerTokensEstimate;
+  ysAccum.blocks++;
+
+  const ratio = ysAccum.totalOutput > 0
+    ? Math.round(((ysAccum.totalOutput - ysAccum.totalFiller) / ysAccum.totalOutput) * 100)
+    : 100;
+
+  const grade = ratio >= 95 ? 'A' : ratio >= 85 ? 'B' : ratio >= 70 ? 'C' : 'D';
+  const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--gold,#f0c040)' : 'var(--red)';
+
+  document.getElementById('ys-ratio').textContent = ratio + '%';
+  document.getElementById('ys-grade').textContent = grade;
+  document.getElementById('ys-grade').style.color = gradeColor;
+  document.getElementById('ys-saved').textContent = ysAccum.totalFiller;
+
+  const fill = document.getElementById('ys-fill');
+  fill.style.width = ratio + '%';
+  fill.style.background = ratio >= 85 ? 'var(--green)' : ratio >= 70 ? 'var(--gold,#f0c040)' : 'var(--red)';
+
+  document.getElementById('ys-detail').textContent =
+    `${ysAccum.blocks} blocks | ${ysAccum.totalOutput} tok out | ${ysAccum.totalFiller} filler`;
+}
+
+async function fetchYouspeakStats() {
+  try {
+    const resp = await fetch('/api/youspeak');
+    const data = await resp.json();
+    if (data.usefulRatio !== undefined) {
+      const ratio = Math.round(data.usefulRatio * 100);
+      document.getElementById('ys-ratio').textContent = ratio + '%';
+      document.getElementById('ys-grade').textContent = data.overallGrade || '—';
+      document.getElementById('ys-saved').textContent = data.tokensSaved || 0;
+      document.getElementById('ys-detail').textContent =
+        `Action density: ${data.actionDensity} | ${data.textBlocks} blocks`;
+    }
+  } catch {}
 }
 
 // ─── TOOL COMMAND SHORTCUTS ─────────────────────────────
