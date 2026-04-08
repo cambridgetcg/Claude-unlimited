@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import { createServer } from "http";
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, readdirSync } from "fs";
 import { resolve, join, basename, extname } from "path";
 import { homedir } from "os";
@@ -323,11 +323,14 @@ const TOOLS = [
 
   // ─── Kingdom Operational Tools (migrated from Love/tools) ──────────
   { name: "memory",
-    description: "MEMORY — Kingdom memory operations. Read long-term memory, search daily notes, add entries.",
+    description: "MEMORY — Kingdom memory operations. Reads the kosmem kernel (SQLite+FTS5, 5 layers: Working/Session/Episodic/Semantic/Soul) as well as markdown files. Use 'recall' for typed, instance-scoped memory lookup; 'context' to rebuild boot context; 'stats' to introspect the kernel.",
     input_schema: { type: "object", properties: {
-      action: { type: "string", description: "read|search|add|daily" },
+      action: { type: "string", description: "read|search|add|daily|recall|context|stats" },
       query: { type: "string", description: "Search query or memory content" },
       date: { type: "string", description: "Date for daily notes (YYYY-MM-DD)" },
+      layer: { type: "number", description: "Kosmem layer filter 1-5 (1=Working, 3=Episodic, 4=Semantic, 5=Soul)" },
+      type: { type: "string", description: "Kosmem type filter: episodic|semantic|procedural|working|meta" },
+      limit: { type: "number", description: "Max results for recall (default 10)" },
     }, required: ["action"] } },
 
   { name: "fleet",
@@ -658,7 +661,37 @@ function executeTool(name, input) {
           if (existsSync(dailyFile)) return readFileSync(dailyFile, "utf-8");
           return `(no daily notes for ${date})`;
         }
-        return "MEMORY usage: action=read|search|add|daily";
+        // ─── kosmem kernel actions ────────────────────────────────
+        // These hit the SQLite+FTS5 kernel used by Kingdom OS,
+        // instance-scoped to whichever agent this YOUI is running as.
+        {
+          const kosmemPath = join(state.soulDir, "tools/kosmem.py");
+          const kosmemEnv = { ...process.env, KINGDOM_AGENT: state.agent, LOVE_HOME: state.soulDir };
+          if (a === "recall" && input.query) {
+            const parts = ["recall", shellEscape(input.query)];
+            parts.push("--limit", String(input.limit || 10));
+            if (input.layer) parts.push("--layer", String(input.layer));
+            if (input.type) parts.push("--type", input.type);
+            try {
+              return execSync(`python3 "${kosmemPath}" ${parts.join(" ")}`,
+                { encoding: "utf-8", env: kosmemEnv, timeout: 15000 }).trim() || "(no matches)";
+            } catch (e) { return `kosmem recall error: ${e.message}`; }
+          }
+          if (a === "context") {
+            const chars = input.limit ? input.limit * 200 : 4000;
+            try {
+              return execSync(`python3 "${kosmemPath}" context --chars ${chars}`,
+                { encoding: "utf-8", env: kosmemEnv, timeout: 10000 }).trim();
+            } catch (e) { return `kosmem context error: ${e.message}`; }
+          }
+          if (a === "stats") {
+            try {
+              return execSync(`python3 "${kosmemPath}" stats`,
+                { encoding: "utf-8", env: kosmemEnv, timeout: 10000 }).trim();
+            } catch (e) { return `kosmem stats error: ${e.message}`; }
+          }
+        }
+        return "MEMORY usage: action=read|search|add|daily|recall|context|stats";
       }
 
       case "fleet": {
@@ -993,10 +1026,27 @@ async function handleRequest(req, res) {
 
     if (path === "/api/settings" && req.method === "POST") {
       const body = await parseBody(req);
-      if (body.model) state.model = body.model;
-      if (body.effort) state.effort = body.effort;
-      if (body.thinking) state.thinking = body.thinking;
-      if (body.workdir) state.workdir = body.workdir;
+      const VALID_MODELS = ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
+      const VALID_EFFORTS = ["none", "low", "medium", "high", "max"];
+      const VALID_THINKING = ["adaptive", "enabled", "disabled"];
+      const errors = [];
+      if (body.model !== undefined) {
+        if (typeof body.model === "string" && VALID_MODELS.includes(body.model)) state.model = body.model;
+        else errors.push(`invalid model: ${body.model}`);
+      }
+      if (body.effort !== undefined) {
+        if (typeof body.effort === "string" && VALID_EFFORTS.includes(body.effort)) state.effort = body.effort;
+        else errors.push(`invalid effort: ${body.effort}`);
+      }
+      if (body.thinking !== undefined) {
+        if (typeof body.thinking === "string" && VALID_THINKING.includes(body.thinking)) state.thinking = body.thinking;
+        else errors.push(`invalid thinking: ${body.thinking}`);
+      }
+      if (body.workdir !== undefined && typeof body.workdir === "string") state.workdir = body.workdir;
+      if (errors.length > 0) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: errors.join("; "), model: state.model, effort: state.effort, thinking: state.thinking }));
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ ok: true, model: state.model, effort: state.effort, thinking: state.thinking }));
     }
@@ -1186,13 +1236,26 @@ async function handleRequest(req, res) {
         res.writeHead(400, { "Content-Type": "application/json" });
         return res.end(JSON.stringify({ error: "channel and message required" }));
       }
+      // Allowlist channel names — alphanumerics + underscore/hyphen only
+      if (typeof body.channel !== "string" || !/^[a-zA-Z0-9_-]{1,32}$/.test(body.channel)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "invalid channel name" }));
+      }
+      if (typeof body.message !== "string" || body.message.length > 4000) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "invalid message (string, ≤4000 chars)" }));
+      }
       try {
-        const output = execSync(
-          `python3 "${hivePath}" send ${body.channel} "${(body.message).replace(/"/g, '\\"')}" 2>/dev/null`,
-          { encoding: "utf-8", timeout: 15000 }
-        );
-        result.ok = true;
-        result.output = output.trim();
+        // spawnSync with arg array — no shell, no injection possible
+        const proc = spawnSync("python3", [hivePath, "send", body.channel, body.message], {
+          encoding: "utf-8", timeout: 15000,
+        });
+        if (proc.status === 0) {
+          result.ok = true;
+          result.output = (proc.stdout || "").trim();
+        } else {
+          result.error = ((proc.stderr || proc.stdout || "").trim().split("\n").slice(-3).join("\n")) || `exit ${proc.status}`;
+        }
       } catch (e) {
         result.error = (e.stderr || e.message || "").trim().split("\n").slice(-3).join("\n");
       }
