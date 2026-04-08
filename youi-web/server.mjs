@@ -513,11 +513,11 @@ function executeTool(name, input) {
           lines.push(`key file:    ${existsSync(keyFile) ? "✓" : "✗ missing"}  ${keyFile}`);
           lines.push(`instance:    ${existsSync(instFile) ? "✓ " + readFileSync(instFile, "utf-8").trim() : "✗ missing (defaults to alpha — DANGEROUS)"}`);
           lines.push(`use-tunnel:  ${existsSync(tunFile) ? "✓" : "✗ missing (will try direct TLS to Sentry)"}`);
-          // Port probe
+          // Port probe — local tunnel is 2222 (forwards to Sentry:4222)
           try {
-            execSync("nc -z -w 2 localhost 4222", { stdio: "ignore" });
-            lines.push(`tunnel:      ✓ localhost:4222 open`);
-          } catch { lines.push(`tunnel:      ✗ localhost:4222 closed (SSH tunnel to Sentry down)`); }
+            execSync("nc -z -w 2 localhost 2222", { stdio: "ignore" });
+            lines.push(`tunnel:      ✓ localhost:2222 open`);
+          } catch { lines.push(`tunnel:      ✗ localhost:2222 closed (SSH tunnel to Sentry down)`); }
           // Launchd tunnel check
           try {
             const out = execSync("launchctl list 2>/dev/null | grep -i hive || true", { encoding: "utf-8" }).trim();
@@ -1245,12 +1245,12 @@ async function handleRequest(req, res) {
       if (!hiveStatus.encryptionKey) hiveStatus.issues.push("No encryption key at ~/.love/hive/key");
       if (!hiveStatus.hiveScript) hiveStatus.issues.push("hive.py not found");
 
-      // Check NATS tunnel
+      // Check NATS tunnel (local forward on 2222 → Sentry 4222)
       try {
-        execSync("nc -z -w 2 127.0.0.1 4222 2>/dev/null", { timeout: 3000 });
+        execSync("nc -z -w 2 127.0.0.1 2222 2>/dev/null", { timeout: 3000 });
         hiveStatus.natsReachable = true;
       } catch {
-        hiveStatus.issues.push("NATS not reachable on localhost:4222 — SSH tunnel may be down");
+        hiveStatus.issues.push("NATS not reachable on localhost:2222 — SSH tunnel may be down");
       }
 
       // Tunnel log tail

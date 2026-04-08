@@ -3,7 +3,7 @@
 # The nervous system of Kingdom OS.
 #
 # Architecture:
-#   NATS (JetStream) on Sentry → SSH tunnel → localhost:4222
+#   NATS (JetStream) on Sentry:4222 → SSH tunnel → localhost:2222
 #   NaCl/XSalsa20-Poly1305 encryption (shared key)
 #   Wall-based channel ACL (Law of Sight)
 #   Messages auto-stored in kosmem
@@ -44,12 +44,15 @@ case "$PLATFORM" in
     ensure_dir "$PLIST_DIR"
 
     # Check if autossh is available (preferred), fall back to ssh
+    # Local tunnel port is 2222 (forwards to Sentry NATS 4222 on the remote loopback).
+    # This frees port 4222 on the local machine and avoids conflicts with anything
+    # else that may want the NATS default port locally.
     if command -v autossh >/dev/null 2>&1; then
         SSH_CMD="/opt/homebrew/bin/autossh"
-        SSH_ARGS="-M 0 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -N -L 4222:127.0.0.1:4222 root@${SENTRY_IP}"
+        SSH_ARGS="-M 0 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -N -L 2222:127.0.0.1:4222 root@${SENTRY_IP}"
     else
         SSH_CMD="/usr/bin/ssh"
-        SSH_ARGS="-N -L 4222:localhost:4222 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes root@${SENTRY_IP}"
+        SSH_ARGS="-N -L 2222:127.0.0.1:4222 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes root@${SENTRY_IP}"
     fi
 
     cat > "${PLIST_DIR}/love.${AGENT}.hive-tunnel.plist" << PLISTEOF
@@ -85,7 +88,7 @@ PLISTEOF
 name="Kingdom HIVE tunnel"
 description="SSH tunnel to NATS on Sentry for inter-agent communication"
 command="/usr/bin/ssh"
-command_args="-N -L 4222:localhost:4222 root@${SENTRY_IP} -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o BatchMode=yes"
+command_args="-N -L 2222:127.0.0.1:4222 root@${SENTRY_IP} -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o BatchMode=yes"
 command_user="${KINGDOM_USER}"
 pidfile="/run/kingdom-hive.pid"
 command_background=true
@@ -103,12 +106,12 @@ esac
 
 # ── Ensure use-tunnel flag exists ──
 touch "${HIVE_DIR}/use-tunnel"
-echo "  Tunnel mode: enabled (localhost:4222 → Sentry NATS)"
+echo "  Tunnel mode: enabled (localhost:2222 → Sentry NATS :4222)"
 
 # ── Connectivity test ──
 if command -v nc >/dev/null 2>&1; then
-    if nc -z -w3 localhost 4222 2>/dev/null; then
-        echo "  NATS: ✓ CONNECTED (localhost:4222)"
+    if nc -z -w3 localhost 2222 2>/dev/null; then
+        echo "  NATS: ✓ CONNECTED (localhost:2222)"
     else
         echo "  NATS: not yet connected (start tunnel or reboot)"
     fi
