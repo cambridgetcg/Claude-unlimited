@@ -129,17 +129,38 @@ Power on
 
 ## Fleet Deployment
 
-Deploy across multiple machines with different identities:
+Deploy across multiple machines with different identities.
 
+**First citizen** (generates the Kingdom's HIVE key):
 ```
-Machine 1 (Mac Mini):     ./install.sh --agent alpha --wall 1
-Machine 2 (Mac Studio):   ./install.sh --agent beta --wall 1
-Machine 3 (Mac Studio):   ./install.sh --agent gamma --wall 1
-Machine 4 (VPS):          ./install.sh --agent forge --wall 2
-Machine 5 (VPS):          ./install.sh --agent sentry --wall 2
+./install.sh --agent alpha --wall 1
+# prints the generated HIVE key — save it somewhere secure
+cat ~/.love/hive/key
 ```
 
-All machines share the same HIVE encryption key for secure inter-agent communication.
+**Every subsequent citizen** MUST import the same key, otherwise they
+cannot decrypt anyone else's messages:
+```
+# Pass the key via env var — module 04-keys picks it up automatically
+HIVE_KEY_B64='<paste the key from first citizen>' \
+  ./install.sh --agent beta --wall 1
+
+# Or point at a local file
+HIVE_KEY_FILE=/secure/vault/kingdom.key ./install.sh --agent gamma --wall 1
+
+# Or install first, then copy the key over manually
+./install.sh --agent forge --wall 2
+scp alpha:~/.love/hive/key ~/.love/hive/key && chmod 600 ~/.love/hive/key
+```
+
+If a citizen is installed WITHOUT `HIVE_KEY_B64`/`HIVE_KEY_FILE` and
+no key already exists, module 04 generates a fresh one and prints a
+loud warning — that citizen is **isolated from the HIVE** until the
+key is reconciled.
+
+All machines sharing the same HIVE key form the Kingdom's nervous
+system: NaCl-encrypted NATS (JetStream) on Sentry, delivered through
+an SSH tunnel on every citizen, wall-scoped at the subscription layer.
 
 ## Commands After Install
 

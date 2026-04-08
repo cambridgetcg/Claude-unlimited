@@ -208,8 +208,13 @@ const TOOLS = [
     input_schema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" } }, required: ["pattern"] } },
   { name: "grep", description: "Search file contents with regex.",
     input_schema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" } }, required: ["pattern"] } },
-  { name: "hive", description: "HIVE inter-agent messaging. Actions: check, send <channel> <message>.",
-    input_schema: { type: "object", properties: { action: { type: "string" }, channel: { type: "string" }, message: { type: "string" } }, required: ["action"] } },
+  { name: "hive",
+    description: "HIVE inter-agent messaging — the nervous system of the Kingdom. Citizens communicate via NaCl-encrypted NATS (JetStream) through an SSH tunnel to Sentry. Actions: check (pull new messages + auto-publish presence), send <channel> <message>, who (presence roster: alpha/beta/gamma/nuance/asha status), status (connectivity diagnosis: tunnel, key, instance file), presence (publish a manual presence beacon with optional message).",
+    input_schema: { type: "object", properties: {
+      action: { type: "string", description: "check|send|who|status|presence" },
+      channel: { type: "string", description: "Channel name for send (e.g. presence, tasks, intel, alerts)" },
+      message: { type: "string", description: "Message body for send or presence" },
+    }, required: ["action"] } },
 
   // ─── Kingdom Cognitive Tools (migrated from Love/tools/cognitive) ──
   { name: "joinmind",
@@ -462,17 +467,65 @@ function executeTool(name, input) {
       case "hive": {
         const hivePath = join(state.soulDir, "hive/hive.py");
         if (!existsSync(hivePath)) return "HIVE not found";
+        const hiveEnv = {
+          ...process.env,
+          LOVE_HOME: state.soulDir,
+          // First drain of a fresh JetStream consumer can be large;
+          // give check more rope than the legacy 15s hardcoded timeout.
+          HIVE_CHECK_TIMEOUT: process.env.HIVE_CHECK_TIMEOUT || "60",
+        };
+        const runHive = (args, timeoutMs) => {
+          const proc = spawnSync("python3", [hivePath, ...args], {
+            encoding: "utf-8", timeout: timeoutMs, env: hiveEnv,
+          });
+          if (proc.status === 0) return (proc.stdout || "").trim();
+          const err = ((proc.stderr || proc.stdout || "").trim().split("\n").slice(-3).join("\n")) || `exit ${proc.status}`;
+          return `HIVE error: ${err}`;
+        };
         if (input.action === "check") {
-          try { return execSync(`python3 "${hivePath}" check`, { encoding: "utf-8", timeout: 30000,
-            env: { ...process.env, LOVE_HOME: state.soulDir } }).trim() || "(no messages)";
-          } catch (e) { return `HIVE error: ${e.stderr || e.message}`; }
+          return runHive(["check"], 65000) || "(no messages)";
         }
         if (input.action === "send" && input.channel && input.message) {
-          try { return execSync(`python3 "${hivePath}" send ${input.channel} ${shellEscape(input.message)}`,
-            { encoding: "utf-8", timeout: 15000, env: { ...process.env, LOVE_HOME: state.soulDir } }).trim();
-          } catch (e) { return `HIVE error: ${e.stderr || e.message}`; }
+          // Same allowlist as /api/hive/send — no shell, no injection
+          if (!/^[a-zA-Z0-9_-]{1,32}$/.test(input.channel)) return "HIVE error: invalid channel name (alnum/_/- only, ≤32)";
+          if (typeof input.message !== "string" || input.message.length > 4000) return "HIVE error: message must be string ≤4000 chars";
+          return runHive(["send", input.channel, input.message], 20000);
         }
-        return "Usage: action=check or action=send with channel+message";
+        if (input.action === "who") {
+          return runHive(["who"], 15000) || "(no presence data)";
+        }
+        if (input.action === "presence") {
+          // Publish a manual presence beacon; with optional annotation
+          const msg = (typeof input.message === "string" && input.message.trim())
+            ? input.message.slice(0, 500)
+            : `${state.agent} presence beacon`;
+          return runHive(["send", "presence", msg], 15000);
+        }
+        if (input.action === "status") {
+          // Human-readable connectivity diagnosis
+          const lines = [];
+          const homeDir = homedir();
+          const keyFile = join(homeDir, ".love/hive/key");
+          const instFile = join(homeDir, ".love/hive/instance");
+          const tunFile = join(homeDir, ".love/hive/use-tunnel");
+          lines.push(`agent:       ${state.agent}`);
+          lines.push(`hive.py:     ${existsSync(hivePath) ? "✓" : "✗ missing"}  ${hivePath}`);
+          lines.push(`key file:    ${existsSync(keyFile) ? "✓" : "✗ missing"}  ${keyFile}`);
+          lines.push(`instance:    ${existsSync(instFile) ? "✓ " + readFileSync(instFile, "utf-8").trim() : "✗ missing (defaults to alpha — DANGEROUS)"}`);
+          lines.push(`use-tunnel:  ${existsSync(tunFile) ? "✓" : "✗ missing (will try direct TLS to Sentry)"}`);
+          // Port probe
+          try {
+            execSync("nc -z -w 2 localhost 4222", { stdio: "ignore" });
+            lines.push(`tunnel:      ✓ localhost:4222 open`);
+          } catch { lines.push(`tunnel:      ✗ localhost:4222 closed (SSH tunnel to Sentry down)`); }
+          // Launchd tunnel check
+          try {
+            const out = execSync("launchctl list 2>/dev/null | grep -i hive || true", { encoding: "utf-8" }).trim();
+            lines.push(`launchd:     ${out || "no hive-* service loaded"}`);
+          } catch {}
+          return lines.join("\n");
+        }
+        return "Usage: action=check|send|who|status|presence";
       }
 
       // ─── Kingdom Cognitive Tools ─────────────────────────
