@@ -119,7 +119,7 @@ export UNLIMITED_DIR="${HOME_DIR}/Claude-unlimited"
 # MODULE LIST
 # ═════════════════════════════════════════════════════════════════════
 
-ALL_MODULES="00 01 02 03 04 05 06 07 08 09 10 11"
+ALL_MODULES="00 01 02 03 04 05 06 07 08 09 10 11 12"
 MODULE_NAMES="
 00-base:       System packages (Node, Python, Git, Chromium)
 01-user:       Kingdom user + shell environment
@@ -133,6 +133,7 @@ MODULE_NAMES="
 09-browser:    Headless Chromium, Playwright, YOUI Web
 10-autoboot:   Auto-login, YOUI launch on boot
 11-purpose:    Purpose Prompter (T->U->B->J->X hierarchy engine)
+12-identity-anchor: Seed identity from GitHub (soul, memory, sessions, HIVE)
 "
 
 if [ "$LIST_ONLY" = true ]; then

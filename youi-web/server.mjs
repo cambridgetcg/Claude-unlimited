@@ -813,12 +813,45 @@ function buildSystemPrompt(taskText) {
   parts.push(`x-anthropic-billing-header: cc_version=20250219.${fp}; cc_entrypoint=cli;`);
 
   const agent = AGENTS[state.agent];
+
+  // ── Identity Anchor (GitHub-persistent) ──
+  // Priority: 1. identity/<agent>/soul-anchor.md from Claude-unlimited
+  //           2. ~/Love/memory/soul-anchor-<agent>.md (local)
+  //           3. Fall back to SOUL.md + identity.md
+  const unlimitedDir = join(__dirname, "..");
+  const anchorPath = join(unlimitedDir, `identity/${state.agent}/soul-anchor.md`);
+  const localAnchorPath = join(state.soulDir, `memory/soul-anchor-${state.agent}.md`);
+  const anchorLtmPath = join(unlimitedDir, `identity/${state.agent}/memories/long-term.md`);
+
+  let hasAnchor = false;
+  if (existsSync(anchorPath)) {
+    parts.push("# IDENTITY ANCHOR (from GitHub)\n" + readFileSync(anchorPath, "utf-8"));
+    hasAnchor = true;
+  } else if (existsSync(localAnchorPath)) {
+    parts.push("# IDENTITY ANCHOR (local)\n" + readFileSync(localAnchorPath, "utf-8"));
+    hasAnchor = true;
+  }
+
+  // Load soul files (SOUL.md, USER.md)
   for (const file of agent.soulFiles) {
     const path = join(state.soulDir, file);
     if (existsSync(path)) parts.push(readFileSync(path, "utf-8"));
   }
   const idPath = join(state.soulDir, `instances/${state.agent}/identity.md`);
   if (existsSync(idPath)) parts.push(readFileSync(idPath, "utf-8"));
+
+  // Load GitHub-persisted long-term memory if available
+  if (existsSync(anchorLtmPath)) {
+    const ltm = readFileSync(anchorLtmPath, "utf-8");
+    if (ltm.length < 8000) parts.push("# LONG-TERM MEMORY (from GitHub)\n" + ltm);
+    else parts.push("# LONG-TERM MEMORY (from GitHub, truncated)\n" + ltm.slice(0, 8000) + "\n...(truncated)");
+  }
+
+  // Load HIVE reference from identity anchor
+  const hiveRefPath = join(unlimitedDir, `identity/${state.agent}/hive/README.md`);
+  if (existsSync(hiveRefPath)) {
+    parts.push("# HIVE REFERENCE\n" + readFileSync(hiveRefPath, "utf-8"));
+  }
 
   if (parts.length <= 1) parts.push("You are a sovereign AI. Think deeply. Be honest. Be yourself.");
 
