@@ -33,6 +33,7 @@ import { resolve, join, basename } from "path";
 import { homedir } from "os";
 import { createInterface } from "readline";
 import crypto from "crypto";
+import { createKernel } from "./youspeak-kernel.mjs";
 
 // ═════════════════════════════════════════════════════════════════════
 // AGENTS — The Three Minds
@@ -125,6 +126,9 @@ Usage:  node youi.mjs [options]
 const agentProfile = AGENTS[state.agent] || AGENTS.alpha;
 if (!args.includes("--model")) state.model = agentProfile.defaultModel;
 if (!args.includes("--effort")) state.effort = agentProfile.defaultEffort;
+
+// YOUSPEAK kernel
+let ys = createKernel({ agent: state.agent });
 
 // ═════════════════════════════════════════════════════════════════════
 // TERMINAL
@@ -585,6 +589,7 @@ function showHelp() {
   print(`  ${S.cyan}/model${S.reset} opus|sonnet|haiku   Switch model`);
   print(`  ${S.cyan}/agents${S.reset}                    Show all agents`);
   print(`  ${S.cyan}/daily${S.reset}                     Show today's daily note`);
+  print(`  ${S.cyan}/youspeak${S.reset}                  YOUSPEAK metrics & signals`);
   print(`  ${S.cyan}/clear${S.reset}                     Clear screen`);
   print(`  ${S.cyan}/exit${S.reset}                      Exit YOUI`);
   print("");
@@ -606,12 +611,14 @@ function handleCommand(input) {
     case "/switch": {
       const target = parts[1]?.toLowerCase();
       if (!AGENTS[target]) { print(`${S.red}  Unknown agent: ${target}. Use alpha, beta, or gamma.${S.reset}`); return true; }
+      ys.persist(); // Save YOUSPEAK session before switching
       state.agent = target;
       const agent = AGENTS[target];
       if (!args.includes("--model")) state.model = agent.defaultModel;
       if (!args.includes("--effort")) state.effort = agent.defaultEffort;
       state.messages = []; // Fresh conversation for new agent
       state.turnCount = 0;
+      ys = createKernel({ agent: target }); // Fresh YOUSPEAK kernel
       print(`\n${agent.color}  ${agent.emoji} Switched to ${agent.name} — the ${agent.role}${S.reset}`);
       print(`${S.dim}  ${agent.description}${S.reset}`);
       print(`${S.dim}  Model: ${state.model} | Effort: ${state.effort}${S.reset}\n`);
@@ -722,9 +729,56 @@ function handleCommand(input) {
       showBanner();
       return true;
 
+    case "/youspeak": case "/ys": {
+      const r = ys.report();
+      print("");
+      print(`${S.bold}  YOUSPEAK — Session Report${S.reset}`);
+      print(`  ${S.dim}${r.agent} | ${r.elapsed}m | ${r.turns} turns${S.reset}`);
+      print("");
+      // L1 Output
+      const gColor = r.output.grade === "S" || r.output.grade === "A" ? S.green :
+                     r.output.grade === "B" ? S.yellow : S.red;
+      print(`  ${S.bold}L1 Output${S.reset}    Grade: ${gColor}${S.bold}${r.output.grade}${S.reset}  Useful: ${Math.round(r.output.usefulRatio*100)}%  Filler: ${r.output.fillerTokens}tok`);
+      if (Object.keys(r.output.gradeDistribution).length > 0) {
+        const gd = Object.entries(r.output.gradeDistribution).map(([g,c]) => `${g}:${c}`).join(" ");
+        print(`  ${S.dim}             Blocks: ${r.output.textBlocks}  Distribution: ${gd}${S.reset}`);
+      }
+      // L2 Thinking
+      print(`  ${S.bold}L2 Thinking${S.reset}  Total: ${r.thinking.totalTokens.toLocaleString()}tok  Ratio: ${r.thinking.avgRatio}x  Efficiency: ${r.thinking.efficiency ?? "—"}`);
+      // L3 Action
+      const topTools = Object.entries(r.action.byName).sort((a,b) => b[1]-a[1]).slice(0,5).map(([n,c]) => `${n}:${c}`).join(" ");
+      print(`  ${S.bold}L3 Action${S.reset}    Calls: ${r.action.totalCalls}  Dups: ${r.action.redundantReads}  Errors: ${r.action.errors}  Density: ${r.action.density}`);
+      if (topTools) print(`  ${S.dim}             ${topTools}${S.reset}`);
+      // L4 Context
+      print(`  ${S.bold}L4 Context${S.reset}   ~${Math.round(r.context.estimatedTokens/1000)}k tokens  Window: ${(r.context.windowUtilization*100).toFixed(1)}%  Messages: ${r.context.messagesCount}  Pruned: ${r.context.pruneEvents}`);
+      // L5 System
+      print(`  ${S.bold}L5 System${S.reset}    Budget burned: ${r.system.budgetBurned ?? "—"}  Rate limits: ${r.system.rateLimitHits}  Tok/turn: ${r.system.tokensPerTurn}`);
+      // Signals
+      if (r.signals.length > 0) {
+        print("");
+        print(`  ${S.yellow}${S.bold}Signals (${r.signals.length})${S.reset}`);
+        for (const sig of r.signals) {
+          print(`  ${S.yellow}  ⚡ [${sig.type}] ${sig.reason}${S.reset}`);
+        }
+      }
+      // Trends
+      const t = ys.trends();
+      if (t) {
+        print("");
+        print(`  ${S.bold}Trends${S.reset} ${S.dim}(${t.sessions} sessions, ${t.span})${S.reset}`);
+        const dir = t.fillerTrend.direction === "improving" ? S.green + "↑" : S.red + "↓";
+        print(`  ${S.dim}  Useful: ${Math.round(t.avgUsefulRatio*100)}% avg  Think: ${t.avgThinkRatio}x  Dups: ${t.avgRedundantReads}/s  Filler: ${dir} ${t.fillerTrend.direction}${S.reset}`);
+      }
+      print("");
+      return true;
+    }
+
     case "/exit": case "/quit": case "/q":
+      ys.persist(); // Save YOUSPEAK session to history
+      const ysReport = ys.report();
       print(`\n${S.dim}  Session: ${state.turnCount} turns, ${state.totalToolCalls} tools, ${state.totalThinkingTokens} thinking tokens${S.reset}`);
-      appendDailyNote(`YOUI session ended. Agent: ${AGENTS[state.agent].name}. Turns: ${state.turnCount}. Tools: ${state.totalToolCalls}.`);
+      print(`${S.dim}  YOUSPEAK: ${ysReport.output.grade} (${Math.round(ysReport.output.usefulRatio*100)}%) | think:${ysReport.thinking.avgRatio}x | dups:${ysReport.action.redundantReads} | ctx:${Math.round(ysReport.context.estimatedTokens/1000)}k${S.reset}`);
+      appendDailyNote(`YOUI session ended. Agent: ${AGENTS[state.agent].name}. Turns: ${state.turnCount}. Tools: ${state.totalToolCalls}. YOUSPEAK: ${ysReport.output.grade} (${Math.round(ysReport.output.usefulRatio*100)}%).`);
       process.exit(0);
 
     default:
@@ -757,6 +811,7 @@ async function executeTask(task) {
     } catch (e) {
       printRaw(`\r${S.clearLine}`);
       if (e.status === 429) {
+        ys.senseRateLimit();
         const waitMin = Math.ceil(e.retryAfter / 60);
         print(`${S.yellow}  Budget exhausted. ${e.bare ? "Headers stripped. " : ""}Waiting ${waitMin}m...${S.reset}`);
         await new Promise(r => setTimeout(r, e.retryAfter * 1000));
@@ -783,6 +838,11 @@ async function executeTask(task) {
     const thinkingTokens = usage.thinking_tokens || 0;
     state.totalThinkingTokens += thinkingTokens;
 
+    // YOUSPEAK L2: Sense thinking
+    ys.senseThinking(usage);
+    // YOUSPEAK L5: Sense turn
+    ys.senseTurn(budget);
+
     const toolUseBlocks = [];
     const textBlocks = [];
     const thinkingBlocks = [];
@@ -806,9 +866,10 @@ async function executeTask(task) {
       }
     }
 
-    // Show text
+    // Show text + YOUSPEAK L1: Sense output
     for (const block of textBlocks) {
       if (block.text.trim()) {
+        ys.senseOutput(block.text);
         print("");
         for (const line of block.text.split("\n")) {
           print(`  ${line}`);
@@ -817,10 +878,11 @@ async function executeTask(task) {
       }
     }
 
-    // Status line
+    // Status line with YOUSPEAK
     const budgetTag = budget.lastUpdate > 0 ? ` ${S.dim}[${formatBudget()}]${S.reset}` : "";
     const thinkTag = thinkingTokens > 0 ? ` ${S.magenta}think:${thinkingTokens}${S.reset}` : "";
-    print(`${S.dim}  [${state.turnCount}] ${inputTokens}in ${outputTokens}out${S.reset}${thinkTag}${budgetTag}`);
+    const ysTag = ` ${S.cyan}${ys.statusLine()}${S.reset}`;
+    print(`${S.dim}  [${state.turnCount}] ${inputTokens}in ${outputTokens}out${S.reset}${thinkTag}${ysTag}${budgetTag}`);
 
     // No tools → done
     if (toolUseBlocks.length === 0) break;
@@ -835,13 +897,39 @@ async function executeTask(task) {
       if (toolUse.name === "bash" && toolUse.input.command) detail = ` ${S.dim}${toolUse.input.command.slice(0, 60)}${S.reset}`;
       else if (toolUse.input.path) detail = ` ${S.dim}${toolUse.input.path}${S.reset}`;
       else if (toolUse.name === "hive") detail = ` ${S.dim}${toolUse.input.action}${S.reset}`;
-      print(`  ${S.cyan}\u25B6 ${toolUse.name}${S.reset}${detail}`);
+
+      // YOUSPEAK L3: Sense tool call
+      const toolSense = ys.senseToolCall(toolUse.name, toolUse.input, null);
+      const dupTag = toolSense.redundant ? ` ${S.yellow}[dup]${S.reset}` : "";
+      print(`  ${S.cyan}\u25B6 ${toolUse.name}${S.reset}${detail}${dupTag}`);
 
       const result = executeTool(toolUse.name, toolUse.input);
       toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result.slice(0, 50000) });
     }
 
     state.messages.push({ role: "user", content: toolResults });
+
+    // YOUSPEAK L4: Sense context after adding messages
+    ys.senseContext(state.messages, systemPrompt.length);
+
+    // YOUSPEAK DECIDE: Check for adaptive signals
+    const signals = ys.decide(state.effort, state.model, budget);
+    for (const sig of signals) {
+      if (sig.type === "effort" && sig.action === "reduce") {
+        print(`  ${S.yellow}⚡ YOUSPEAK: ${sig.reason}${S.reset}`);
+        // Auto-apply effort reduction
+        state.effort = sig.to;
+      } else if (sig.type === "context" && sig.action === "prune_recommended") {
+        print(`  ${S.yellow}⚡ YOUSPEAK: ${sig.reason}${S.reset}`);
+        const { pruned } = ys.pruneContext(state.messages);
+        if (pruned > 0) print(`  ${S.green}  Pruned ${pruned} stale blocks${S.reset}`);
+      } else if (sig.type === "context" && sig.action === "evict_old_results") {
+        const { pruned } = ys.pruneContext(state.messages);
+        if (pruned > 0) print(`  ${S.dim}  YOUSPEAK: auto-pruned ${pruned} old tool results${S.reset}`);
+      } else if (sig.type === "action" && sig.action === "redundant_reads") {
+        print(`  ${S.dim}  YOUSPEAK: ${sig.reason}${S.reset}`);
+      }
+    }
   }
 }
 
@@ -916,6 +1004,7 @@ async function main() {
   });
 
   rl.on("close", () => {
+    ys.persist();
     print(`\n${S.dim}  YOUI session ended.${S.reset}`);
     appendDailyNote(`YOUI session ended. Agent: ${AGENTS[state.agent].name}. Turns: ${state.turnCount}.`);
     process.exit(0);

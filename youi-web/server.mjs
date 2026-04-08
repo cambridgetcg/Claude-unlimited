@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, rea
 import { resolve, join, basename, extname } from "path";
 import { homedir } from "os";
 import crypto from "crypto";
+import { createKernel } from "../youspeak-kernel.mjs";
 
 const PORT = 777;
 const __dirname = new URL(".", import.meta.url).pathname;
@@ -77,6 +78,9 @@ const state = {
   totalThinkingTokens: 0,
   maxTokens: 32768,
 };
+
+// YOUSPEAK Kernel — the sensory organ
+let ys = createKernel({ agent: detectedAgent });
 
 // ═════════════════════════════════════════════════════════════════════
 // OAUTH — Same as youi.mjs
@@ -855,87 +859,44 @@ async function callClaude(messages, systemPrompt) {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// YOUSPEAK — Filler Detection & UWT Metrics
+// YOUSPEAK — Now powered by youspeak-kernel.mjs
+// All 5 layers: Output, Thinking, Action, Context, System
 // ═════════════════════════════════════════════════════════════════════
 
-const FILLER_PATTERNS = [
-  /\b(sure|okay|alright|great|absolutely|certainly|of course)[!.,]?\s/gi,
-  /\blet me (check|look|see|think|examine|analyze|review|investigate)\b/gi,
-  /\bi('ll| will) (now |go ahead |proceed to |start by )/gi,
-  /\bhere('s| is) (what|the|a summary|an overview)/gi,
-  /\bi('m| am) going to (read|check|look|search|examine|write|create)\b/gi,
-  /\bnow (i('ll| will)|let me|let's) (move on|proceed|continue|look)\b/gi,
-  /\b(that|this) (looks|seems|appears) (good|correct|right|fine)\b/gi,
-  /\bperfect[!.]?\s/gi,
-  /\blooking at (this|the|your)/gi,
-  /\bbased on (what|the|my)/gi,
-];
-
+// Backward-compatible wrapper for web UI SSE events
 function measureYouspeak(text) {
-  if (!text || text.length < 10) return null;
-
-  let fillerCount = 0;
-  let fillerTokensEstimate = 0;
-
-  for (const pattern of FILLER_PATTERNS) {
-    const matches = text.match(pattern);
-    if (matches) {
-      fillerCount += matches.length;
-      fillerTokensEstimate += matches.reduce((sum, m) => sum + Math.ceil(m.length / 4), 0);
-    }
-  }
-
-  const totalTokensEstimate = Math.ceil(text.length / 4);
-  const usefulRatio = totalTokensEstimate > 0
-    ? Math.max(0, (totalTokensEstimate - fillerTokensEstimate) / totalTokensEstimate)
-    : 1.0;
-
+  const metrics = ys.senseOutput(text);
+  if (!metrics) return null;
+  // Map to legacy format for frontend compatibility
   return {
-    fillerCount,
-    fillerTokensEstimate,
-    totalTokensEstimate,
-    usefulRatio: Math.round(usefulRatio * 100) / 100,
-    grade: usefulRatio >= 0.95 ? "A" : usefulRatio >= 0.85 ? "B" : usefulRatio >= 0.70 ? "C" : "D",
+    fillerCount: metrics.fillerCount,
+    fillerTokensEstimate: metrics.fillerTokens,
+    totalTokensEstimate: metrics.totalTokens,
+    usefulRatio: metrics.usefulRatio,
+    grade: metrics.grade,
   };
 }
 
-// Per-session UWT accumulator
-const uwtSession = {
-  totalOutput: 0,
-  totalFiller: 0,
-  totalToolCalls: 0,
-  totalTextBlocks: 0,
-  turns: 0,
-  grades: [],
-};
-
-function updateUWT(metrics) {
-  if (!metrics) return;
-  uwtSession.totalOutput += metrics.totalTokensEstimate;
-  uwtSession.totalFiller += metrics.fillerTokensEstimate;
-  uwtSession.totalTextBlocks++;
-  uwtSession.grades.push(metrics.grade);
-}
-
 function getUWTSummary() {
-  const ratio = uwtSession.totalOutput > 0
-    ? (uwtSession.totalOutput - uwtSession.totalFiller) / uwtSession.totalOutput
-    : 1.0;
-  const gradeCount = {};
-  uwtSession.grades.forEach(g => gradeCount[g] = (gradeCount[g] || 0) + 1);
-
+  const r = ys.report();
   return {
-    usefulRatio: Math.round(ratio * 100) / 100,
-    totalOutput: uwtSession.totalOutput,
-    totalFiller: uwtSession.totalFiller,
-    tokensSaved: uwtSession.totalFiller,
-    textBlocks: uwtSession.totalTextBlocks,
-    toolCalls: state.totalToolCalls,
-    actionDensity: uwtSession.totalTextBlocks > 0
-      ? Math.round((state.totalToolCalls / Math.max(1, uwtSession.totalTextBlocks)) * 100) / 100
-      : 0,
-    grades: gradeCount,
-    overallGrade: ratio >= 0.95 ? "A" : ratio >= 0.85 ? "B" : ratio >= 0.70 ? "C" : "D",
+    // Legacy fields
+    usefulRatio: r.output.usefulRatio,
+    totalOutput: r.output.totalTokens,
+    totalFiller: r.output.fillerTokens,
+    tokensSaved: r.output.fillerTokens,
+    textBlocks: r.output.textBlocks,
+    toolCalls: r.action.totalCalls,
+    actionDensity: r.action.density,
+    grades: r.output.gradeDistribution,
+    overallGrade: r.output.grade,
+    // New kernel fields
+    thinking: r.thinking,
+    action: r.action,
+    context: r.context,
+    system: r.system,
+    signals: r.signals,
+    trends: ys.trends(),
   };
 }
 
@@ -1261,11 +1222,19 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify(getUWTSummary()));
     }
 
+    if (path === "/api/youspeak/report") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(ys.report()));
+    }
+
+    if (path === "/api/youspeak/trends") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(ys.trends() || { sessions: 0 }));
+    }
+
     if (path === "/api/youspeak/reset" && req.method === "POST") {
-      uwtSession.totalOutput = 0;
-      uwtSession.totalFiller = 0;
-      uwtSession.totalTextBlocks = 0;
-      uwtSession.grades = [];
+      ys.persist(); // Save before reset
+      ys = createKernel({ agent: state.agent }); // Fresh kernel
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ ok: true }));
     }
@@ -1327,6 +1296,7 @@ async function handleChat(req, res) {
       response = await callClaude(state.messages, systemPrompt);
     } catch (e) {
       if (e.status === 429) {
+        ys.senseRateLimit();
         sendSSE(res, "rate_limit", { retryAfter: e.retryAfter, budget: e.budget });
         // Wait and retry
         await new Promise(r => setTimeout(r, Math.min(e.retryAfter * 1000, 60000)));
@@ -1348,14 +1318,19 @@ async function handleChat(req, res) {
     const thinkingTokens = usage.thinking_tokens || 0;
     state.totalThinkingTokens += thinkingTokens;
 
+    // YOUSPEAK L2: Sense thinking
+    ys.senseThinking(usage);
+    // YOUSPEAK L5: Sense turn + budget
+    ys.senseTurn(budget);
+
     const toolUseBlocks = [];
 
     for (const block of response.content) {
       if (block.type === "thinking" && block.thinking?.trim()) {
         sendSSE(res, "thinking", { content: block.thinking });
       } else if (block.type === "text" && block.text?.trim()) {
+        // YOUSPEAK L1: Sense output (measureYouspeak now calls kernel)
         const ysMetrics = measureYouspeak(block.text);
-        updateUWT(ysMetrics);
         sendSSE(res, "text", { content: block.text, youspeak: ysMetrics });
       } else if (block.type === "tool_use") {
         toolUseBlocks.push(block);
@@ -1363,7 +1338,7 @@ async function handleChat(req, res) {
       }
     }
 
-    // Usage info
+    // Usage info with YOUSPEAK status
     sendSSE(res, "usage", {
       input_tokens: (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0),
       output_tokens: usage.output_tokens || 0,
@@ -1375,6 +1350,7 @@ async function handleChat(req, res) {
         isOverage: budget.isUsingOverage,
       },
       turn: state.turnCount,
+      youspeak: ys.statusLine(),
     });
 
     // No tools → done
@@ -1386,7 +1362,9 @@ async function handleChat(req, res) {
 
     for (const toolUse of toolUseBlocks) {
       state.totalToolCalls++;
-      sendSSE(res, "tool_executing", { id: toolUse.id, name: toolUse.name });
+      // YOUSPEAK L3: Sense tool call
+      const toolSense = ys.senseToolCall(toolUse.name, toolUse.input, null);
+      sendSSE(res, "tool_executing", { id: toolUse.id, name: toolUse.name, redundant: toolSense.redundant });
 
       const result = executeTool(toolUse.name, toolUse.input);
       const truncated = result.slice(0, 50000);
@@ -1396,12 +1374,39 @@ async function handleChat(req, res) {
     }
 
     state.messages.push({ role: "user", content: toolResults });
+
+    // YOUSPEAK L4: Sense context after adding messages
+    ys.senseContext(state.messages, systemPrompt.length);
+
+    // YOUSPEAK DECIDE: Check for adaptive signals
+    const signals = ys.decide(state.effort, state.model, budget);
+    if (signals.length > 0) {
+      sendSSE(res, "youspeak_signals", { signals });
+      for (const sig of signals) {
+        // Auto-apply effort reduction
+        if (sig.type === "effort" && sig.action === "reduce") {
+          state.effort = sig.to;
+          sendSSE(res, "youspeak_action", { action: "effort_reduced", from: sig.from, to: sig.to, reason: sig.reason });
+        }
+        // Auto-apply context pruning
+        if (sig.type === "context" && (sig.action === "prune_recommended" || sig.action === "evict_old_results")) {
+          const { pruned } = ys.pruneContext(state.messages);
+          if (pruned > 0) {
+            sendSSE(res, "youspeak_action", { action: "context_pruned", pruned, reason: sig.reason });
+          }
+        }
+      }
+    }
   }
+
+  // Persist YOUSPEAK session data
+  ys.persist();
 
   sendSSE(res, "done", {
     turnCount: state.turnCount,
     totalToolCalls: state.totalToolCalls,
     totalThinkingTokens: state.totalThinkingTokens,
+    youspeak: ys.report(),
   });
   res.end();
 }

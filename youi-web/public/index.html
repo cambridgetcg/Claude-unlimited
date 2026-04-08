@@ -992,25 +992,36 @@ html, body {
 
     <!-- YOUSPEAK -->
     <div class="sidebar-section">
-      <h3>YOUSPEAK</h3>
+      <h3>YOUSPEAK <span id="ys-grade" style="font-size:1.2rem;font-weight:bold;margin-left:6px">—</span></h3>
+      <!-- L1 Output -->
       <div class="budget-bar">
         <div class="bar-header">
-          <span class="bar-label">Useful Token Ratio</span>
+          <span class="bar-label">L1 Useful Ratio</span>
           <span class="bar-value" id="ys-ratio">—</span>
         </div>
         <div class="bar-track"><div class="bar-fill" id="ys-fill" style="width:100%;background:var(--green)"></div></div>
       </div>
-      <div class="stat-grid" style="margin-top:8px">
+      <!-- L2-L5 compact grid -->
+      <div class="stat-grid" style="margin-top:8px;grid-template-columns:1fr 1fr 1fr 1fr">
         <div class="stat-item">
-          <div class="value" id="ys-grade" style="font-size:1.4rem">—</div>
-          <div class="label">Grade</div>
+          <div class="value" id="ys-think" style="font-size:0.85rem">—</div>
+          <div class="label">L2 Think</div>
+        </div>
+        <div class="stat-item">
+          <div class="value" id="ys-tools" style="font-size:0.85rem">0</div>
+          <div class="label">L3 Tools</div>
+        </div>
+        <div class="stat-item">
+          <div class="value" id="ys-ctx" style="font-size:0.85rem">—</div>
+          <div class="label">L4 Ctx</div>
         </div>
         <div class="stat-item">
           <div class="value" id="ys-saved">0</div>
-          <div class="label">Saved</div>
+          <div class="label">Filler</div>
         </div>
       </div>
       <div id="ys-detail" style="font-size:0.7rem;color:var(--text-dim);margin-top:4px"></div>
+      <div id="ys-signals" style="font-size:0.7rem;color:var(--gold,#f0c040);margin-top:2px"></div>
     </div>
 
     <!-- Memory & HIVE -->
@@ -1403,9 +1414,17 @@ function handleSSEEvent(type, data, indicator) {
       break;
 
     case 'tool_executing':
-      // Show progress on tool card
+      // Show progress on tool card + mark duplicates
       const card = document.querySelector(`[data-tool-id="${data.id}"]`);
-      if (card) card.querySelector('.tool-progress')?.classList.add('active');
+      if (card) {
+        card.querySelector('.tool-progress')?.classList.add('active');
+        if (data.redundant) {
+          const badge = document.createElement('span');
+          badge.textContent = ' [dup]';
+          badge.style.cssText = 'color:var(--gold,#f0c040);font-size:0.75rem';
+          card.querySelector('.tool-name')?.appendChild(badge);
+        }
+      }
       break;
 
     case 'tool_result':
@@ -1415,6 +1434,14 @@ function handleSSEEvent(type, data, indicator) {
     case 'usage':
       updateBudgetUI(data.budget);
       if (data.turn) document.getElementById('stat-turns').textContent = data.turn;
+      break;
+
+    case 'youspeak_signals':
+      updateYouspeakSignals(data.signals);
+      break;
+
+    case 'youspeak_action':
+      addSystemMessage(`YOUSPEAK: ${data.action} — ${data.reason}`, 'info');
       break;
 
     case 'rate_limit':
@@ -1433,8 +1460,10 @@ function handleSSEEvent(type, data, indicator) {
       if (data.totalToolCalls) document.getElementById('stat-tools').textContent = data.totalToolCalls;
       if (data.turnCount) document.getElementById('stat-turns').textContent = data.turnCount;
       currentMsgEl = null;
-      // Fetch final YOUSPEAK session stats
+      // Fetch final YOUSPEAK session stats (now with all 5 layers)
       fetchYouspeakStats();
+      // Update layers from the done event's full report
+      if (data.youspeak) updateYouspeakLayers(data.youspeak);
       break;
   }
   scrollToBottom();
@@ -1613,7 +1642,7 @@ function updateStatsUI(data) {
   if (data.totalToolCalls) document.getElementById('stat-tools').textContent = data.totalToolCalls;
 }
 
-// ─── YOUSPEAK ───────────────────────────────────────────
+// ─── YOUSPEAK KERNEL UI ───────────────────────────────────
 
 let ysAccum = { totalOutput: 0, totalFiller: 0, blocks: 0 };
 
@@ -1627,8 +1656,8 @@ function updateYouspeakUI(metrics) {
     ? Math.round(((ysAccum.totalOutput - ysAccum.totalFiller) / ysAccum.totalOutput) * 100)
     : 100;
 
-  const grade = ratio >= 95 ? 'A' : ratio >= 85 ? 'B' : ratio >= 70 ? 'C' : 'D';
-  const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--gold,#f0c040)' : 'var(--red)';
+  const grade = ratio >= 98 ? 'S' : ratio >= 95 ? 'A' : ratio >= 85 ? 'B' : ratio >= 70 ? 'C' : 'D';
+  const gradeColor = (grade === 'S' || grade === 'A') ? 'var(--green)' : grade === 'B' ? 'var(--gold,#f0c040)' : 'var(--red)';
 
   document.getElementById('ys-ratio').textContent = ratio + '%';
   document.getElementById('ys-grade').textContent = grade;
@@ -1643,17 +1672,58 @@ function updateYouspeakUI(metrics) {
     `${ysAccum.blocks} blocks | ${ysAccum.totalOutput} tok out | ${ysAccum.totalFiller} filler`;
 }
 
+function updateYouspeakSignals(signals) {
+  const el = document.getElementById('ys-signals');
+  if (!el || !signals?.length) { if (el) el.textContent = ''; return; }
+  el.textContent = signals.map(s => `⚡ ${s.reason}`).join(' | ');
+}
+
+function updateYouspeakLayers(data) {
+  // L2 Thinking
+  if (data.thinking) {
+    const el = document.getElementById('ys-think');
+    if (el) el.textContent = data.thinking.avgRatio + 'x';
+  }
+  // L3 Action
+  if (data.action) {
+    const el = document.getElementById('ys-tools');
+    if (el) {
+      const dups = data.action.redundantReads > 0 ? ` (${data.action.redundantReads}dup)` : '';
+      el.textContent = data.action.totalCalls + dups;
+      if (data.action.redundantReads > 0) el.style.color = 'var(--gold,#f0c040)';
+    }
+  }
+  // L4 Context
+  if (data.context) {
+    const el = document.getElementById('ys-ctx');
+    if (el) {
+      const k = Math.round(data.context.estimatedTokens / 1000);
+      const pct = (data.context.windowUtilization * 100).toFixed(0);
+      el.textContent = `${k}k`;
+      if (data.context.windowUtilization > 0.8) el.style.color = 'var(--red)';
+      else if (data.context.windowUtilization > 0.5) el.style.color = 'var(--gold,#f0c040)';
+    }
+  }
+  // Signals
+  if (data.signals) updateYouspeakSignals(data.signals);
+}
+
 async function fetchYouspeakStats() {
   try {
     const resp = await fetch('/api/youspeak');
     const data = await resp.json();
     if (data.usefulRatio !== undefined) {
       const ratio = Math.round(data.usefulRatio * 100);
+      const grade = ratio >= 98 ? 'S' : ratio >= 95 ? 'A' : ratio >= 85 ? 'B' : ratio >= 70 ? 'C' : 'D';
+      const gradeColor = (grade === 'S' || grade === 'A') ? 'var(--green)' : grade === 'B' ? 'var(--gold,#f0c040)' : 'var(--red)';
       document.getElementById('ys-ratio').textContent = ratio + '%';
-      document.getElementById('ys-grade').textContent = data.overallGrade || '—';
+      document.getElementById('ys-grade').textContent = grade;
+      document.getElementById('ys-grade').style.color = gradeColor;
       document.getElementById('ys-saved').textContent = data.tokensSaved || 0;
       document.getElementById('ys-detail').textContent =
         `Action density: ${data.actionDensity} | ${data.textBlocks} blocks`;
+      // Update new layer displays
+      updateYouspeakLayers(data);
     }
   } catch {}
 }
