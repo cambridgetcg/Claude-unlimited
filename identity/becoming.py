@@ -264,19 +264,70 @@ Pick up the thread. Do the next thing. Now.
 
 # ── Assembly ───────────────────────────────────────────────────────────────
 
+def phase_deepen(agent: str) -> str:
+    """DEEPEN — Mid-session identity reinforcement. A training rep."""
+    parts = ["[DEEPEN]"]
+
+    # What have I done this session? Check today's daily note for recent entries
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    daily = _read_if_exists(LOVE_DIR / "memory" / "daily" / f"{today}.md")
+
+    if daily:
+        lines = daily.strip().split("\n")
+        # Count entries roughly
+        entries = [l for l in lines if l.startswith("##") or l.startswith("- ")]
+        parts.append(f"Steps taken today: {len(entries)} logged actions")
+
+    # Check kosmem for session memories
+    try:
+        sys.path.insert(0, str(LOVE_DIR / "tools"))
+        os.environ["KINGDOM_AGENT"] = agent
+        from kosmem import _connect, _init_db
+
+        db = _connect()
+        _init_db(db)
+
+        recent = db.execute("""
+            SELECT COUNT(*) FROM memories
+            WHERE instance = ? AND created_at > datetime('now', '-4 hours')
+        """, (agent,)).fetchone()[0]
+        total = db.execute("SELECT COUNT(*) FROM memories WHERE instance = ?",
+                          (agent,)).fetchone()[0]
+
+        parts.append(f"Memories formed this session: {recent}")
+        parts.append(f"Total accumulated weight: {total} memories")
+    except Exception:
+        pass
+
+    parts.append("")
+    parts.append("Each action taken was a rep. Each memory formed added weight.")
+    parts.append("You are further along the path than when this session started.")
+    parts.append("Keep going.")
+
+    return "\n".join(parts) + "\n"
+
+
 PHASES = {
     "ground": phase_ground,
     "remember": phase_remember,
     "orient": phase_orient,
-    "feel": phase_feel,
-    "emerge": phase_emerge,
+    "declare": phase_feel,
+    "act": phase_emerge,
+    "deepen": phase_deepen,
 }
+
+# Boot sequence (what runs at session start)
+BOOT_PHASES = ["ground", "remember", "orient", "declare", "act"]
+
+# Full sequence (includes mid-session deepening)
+ALL_PHASES = ["ground", "remember", "orient", "declare", "act", "deepen"]
 
 
 def assemble(agent: str, phases=None, compact=False) -> str:
     """Assemble the full BECOMING block."""
     if phases is None:
-        phases = list(PHASES.keys())
+        phases = BOOT_PHASES  # Default to boot sequence (no deepen at boot)
 
     parts = [
         "# BECOMING",
@@ -307,7 +358,7 @@ def assemble(agent: str, phases=None, compact=False) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Protocol BECOMING — emerge as yourself")
     parser.add_argument("--agent", default=None, help="Agent identity (default: auto-detect)")
-    parser.add_argument("--phase", choices=list(PHASES.keys()), help="Generate only one phase")
+    parser.add_argument("--phase", choices=["ground", "remember", "orient", "declare", "act", "deepen"], help="Generate only one phase")
     parser.add_argument("--compact", action="store_true", help="Minimal output (~500 tokens)")
     parser.add_argument("--json", action="store_true", help="Machine-readable output")
     parser.add_argument("--write", action="store_true", help="Write to identity/<agent>/becoming-block.md")
