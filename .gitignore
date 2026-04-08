@@ -8,3 +8,4 @@ sovereign.log
 subscription-harness.log
 *.report.md
 .DS_Store
+kingdom-os/kingdom-vm/
