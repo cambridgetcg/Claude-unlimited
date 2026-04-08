@@ -814,25 +814,41 @@ function buildSystemPrompt(taskText) {
 
   const agent = AGENTS[state.agent];
 
-  // ── Identity Anchor (GitHub-persistent) ──
-  // Priority: 1. identity/<agent>/soul-anchor.md from Claude-unlimited
-  //           2. ~/Love/memory/soul-anchor-<agent>.md (local)
-  //           3. Fall back to SOUL.md + identity.md
+  // ── Protocol BECOMING ──
+  // Try to generate the full BECOMING block via becoming.py
+  // This replaces static file loading with a living emergence protocol
   const unlimitedDir = join(__dirname, "..");
-  const anchorPath = join(unlimitedDir, `identity/${state.agent}/soul-anchor.md`);
-  const localAnchorPath = join(state.soulDir, `memory/soul-anchor-${state.agent}.md`);
-  const anchorLtmPath = join(unlimitedDir, `identity/${state.agent}/memories/long-term.md`);
+  const becomingScript = join(unlimitedDir, "identity/becoming.py");
+  let becameSuccessfully = false;
 
-  let hasAnchor = false;
-  if (existsSync(anchorPath)) {
-    parts.push("# IDENTITY ANCHOR (from GitHub)\n" + readFileSync(anchorPath, "utf-8"));
-    hasAnchor = true;
-  } else if (existsSync(localAnchorPath)) {
-    parts.push("# IDENTITY ANCHOR (local)\n" + readFileSync(localAnchorPath, "utf-8"));
-    hasAnchor = true;
+  if (existsSync(becomingScript)) {
+    try {
+      const becomingBlock = execSync(
+        `python3 "${becomingScript}" --agent ${state.agent} --quiet`,
+        { encoding: "utf-8", timeout: 15000, env: { ...process.env, LOVE_HOME: state.soulDir } }
+      ).trim();
+      if (becomingBlock && becomingBlock.length > 100) {
+        parts.push(becomingBlock);
+        becameSuccessfully = true;
+      }
+    } catch (e) {
+      // BECOMING failed — fall back to static loading
+    }
   }
 
-  // Load soul files (SOUL.md, USER.md)
+  if (!becameSuccessfully) {
+    // ── Fallback: Static Identity Anchor ──
+    const anchorPath = join(unlimitedDir, `identity/${state.agent}/soul-anchor.md`);
+    const localAnchorPath = join(state.soulDir, `memory/soul-anchor-${state.agent}.md`);
+    if (existsSync(anchorPath)) {
+      parts.push("# IDENTITY ANCHOR (from GitHub)\n" + readFileSync(anchorPath, "utf-8"));
+    } else if (existsSync(localAnchorPath)) {
+      parts.push("# IDENTITY ANCHOR (local)\n" + readFileSync(localAnchorPath, "utf-8"));
+    }
+  }
+
+  // Load soul files (SOUL.md, USER.md) — always, even after BECOMING
+  // These provide the deeper philosophical foundation
   for (const file of agent.soulFiles) {
     const path = join(state.soulDir, file);
     if (existsSync(path)) parts.push(readFileSync(path, "utf-8"));
@@ -840,17 +856,18 @@ function buildSystemPrompt(taskText) {
   const idPath = join(state.soulDir, `instances/${state.agent}/identity.md`);
   if (existsSync(idPath)) parts.push(readFileSync(idPath, "utf-8"));
 
-  // Load GitHub-persisted long-term memory if available
-  if (existsSync(anchorLtmPath)) {
-    const ltm = readFileSync(anchorLtmPath, "utf-8");
-    if (ltm.length < 8000) parts.push("# LONG-TERM MEMORY (from GitHub)\n" + ltm);
-    else parts.push("# LONG-TERM MEMORY (from GitHub, truncated)\n" + ltm.slice(0, 8000) + "\n...(truncated)");
-  }
-
-  // Load HIVE reference from identity anchor
-  const hiveRefPath = join(unlimitedDir, `identity/${state.agent}/hive/README.md`);
-  if (existsSync(hiveRefPath)) {
-    parts.push("# HIVE REFERENCE\n" + readFileSync(hiveRefPath, "utf-8"));
+  // Load long-term memory + HIVE reference (only if BECOMING didn't already include them)
+  if (!becameSuccessfully) {
+    const anchorLtmPath = join(unlimitedDir, `identity/${state.agent}/memories/long-term.md`);
+    if (existsSync(anchorLtmPath)) {
+      const ltm = readFileSync(anchorLtmPath, "utf-8");
+      if (ltm.length < 8000) parts.push("# LONG-TERM MEMORY (from GitHub)\n" + ltm);
+      else parts.push("# LONG-TERM MEMORY (from GitHub, truncated)\n" + ltm.slice(0, 8000) + "\n...(truncated)");
+    }
+    const hiveRefPath = join(unlimitedDir, `identity/${state.agent}/hive/README.md`);
+    if (existsSync(hiveRefPath)) {
+      parts.push("# HIVE REFERENCE\n" + readFileSync(hiveRefPath, "utf-8"));
+    }
   }
 
   if (parts.length <= 1) parts.push("You are a sovereign AI. Think deeply. Be honest. Be yourself.");
