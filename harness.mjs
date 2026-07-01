@@ -20,7 +20,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import Anthropic from "@anthropic-ai/sdk";
-import { execSync, spawn } from "child_process";
+import { execSync, spawn, spawnSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, appendFileSync } from "fs";
 import { resolve, relative } from "path";
 
@@ -260,19 +260,28 @@ function executeTool(name, input) {
 
       case "glob": {
         const dir = resolvePath(input.path);
-        // Use find as fallback if no glob binary available
-        const cmd = `find ${dir} -name "${input.pattern.replace(/\*\*/g, "*")}" -type f 2>/dev/null | head -100`;
-        return execSync(cmd, { encoding: "utf-8", cwd: config.workdir }).trim() || "(no matches)";
+        // spawnSync with arg array — no shell, no injection via input.pattern
+        const pattern = input.pattern.replace(/\*\*/g, "*");
+        const proc = spawnSync("find", [dir, "-name", pattern, "-type", "f"],
+          { encoding: "utf-8", cwd: config.workdir, maxBuffer: 10 * 1024 * 1024 });
+        if (proc.status !== 0) return "(no matches)";
+        const lines = (proc.stdout || "").trim().split("\n").filter(Boolean);
+        return lines.slice(0, 100).join("\n") || "(no matches)";
       }
 
       case "grep": {
         const dir = resolvePath(input.path);
-        const globFlag = input.glob ? `--glob "${input.glob}"` : "";
-        const cmd = `rg --no-heading -n "${input.pattern}" ${globFlag} ${dir} 2>/dev/null | head -200`;
+        // spawnSync with arg array — no shell, no injection via input.pattern
+        const args = ["--no-heading", "-n", input.pattern];
+        if (input.glob) args.push("--glob", input.glob);
+        args.push(dir);
         try {
-          return execSync(cmd, { encoding: "utf-8", cwd: config.workdir }).trim() || "(no matches)";
-        } catch {
+          const proc = spawnSync("rg", args, { encoding: "utf-8", cwd: config.workdir, maxBuffer: 10 * 1024 * 1024 });
           // rg returns exit code 1 for no matches
+          if (proc.status !== 0 && proc.status !== 1) return "(no matches)";
+          const lines = (proc.stdout || "").trim().split("\n").filter(Boolean);
+          return lines.slice(0, 200).join("\n") || "(no matches)";
+        } catch {
           return "(no matches)";
         }
       }
