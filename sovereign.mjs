@@ -843,7 +843,7 @@ When uncertain, expand. Never compress epistemic signals (probably, unless, in m
 
   // ── Environment (compact) ──
   let gitBranch = "?";
-  try { gitBranch = execSync("git branch --show-current", { cwd: config.workdir, encoding: "utf-8" }).trim(); } catch {}
+  try { const gp = spawnSync("git", ["branch", "--show-current"], { cwd: config.workdir, encoding: "utf-8" }); gitBranch = (gp.stdout || "").trim(); } catch {}
 
   const envParts = [
     `cwd: ${config.workdir}`,

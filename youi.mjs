@@ -428,7 +428,7 @@ Compress scaffolding, preserve substance. Expand for teaching/uncertainty/creati
 Never compress epistemic signals — "probably", "unless", "I think" are sacred.`);
 
   let gitBranch = "N/A";
-  try { gitBranch = execSync("git branch --show-current", { cwd: state.workdir, encoding: "utf-8" }).trim(); } catch {}
+  try { const gp = spawnSync("git", ["branch", "--show-current"], { cwd: state.workdir, encoding: "utf-8" }); gitBranch = (gp.stdout || "").trim(); } catch {}
 
   parts.push(`
 # Environment

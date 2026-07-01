@@ -326,7 +326,7 @@ function getSystemPrompt() {
   const cwd = config.workdir;
   const platform = process.platform;
   const gitBranch = (() => {
-    try { return execSync("git branch --show-current", { cwd, encoding: "utf-8" }).trim(); }
+    try { const gp = spawnSync("git", ["branch", "--show-current"], { cwd, encoding: "utf-8" }); return (gp.stdout || "").trim(); }
     catch { return "N/A"; }
   })();
 

@@ -485,7 +485,7 @@ function saveState(data) {
 function getSystemPrompt() {
   const cwd = config.workdir;
   let gitBranch = "N/A";
-  try { gitBranch = execSync("git branch --show-current", { cwd, encoding: "utf-8" }).trim(); } catch {}
+  try { const gp = spawnSync("git", ["branch", "--show-current"], { cwd, encoding: "utf-8" }); gitBranch = (gp.stdout || "").trim(); } catch {}
 
   return `You are an expert software engineer working in the terminal.
 

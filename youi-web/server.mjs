@@ -539,7 +539,8 @@ function executeTool(name, input) {
           } catch { lines.push(`tunnel:      ✗ localhost:2222 closed (SSH tunnel to Sentry down)`); }
           // Launchd tunnel check
           try {
-            const out = execSync("launchctl list 2>/dev/null | grep -i hive || true", { encoding: "utf-8" }).trim();
+            const proc = spawnSync("launchctl", ["list"], { encoding: "utf-8", timeout: 5000 });
+            const out = (proc.stdout || "").split("\n").filter(l => /hive/i.test(l)).join("\n").trim();
             lines.push(`launchd:     ${out || "no hive-* service loaded"}`);
           } catch {}
           return lines.join("\n");
