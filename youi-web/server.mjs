@@ -96,9 +96,11 @@ let cachedTokens = null;
 
 function readKeychainTokens() {
   try {
-    const raw = execSync(`security find-generic-password -s "${KEYCHAIN_SERVICE}" -w`,
-      { encoding: "utf-8", timeout: 5000 }).trim();
-    return JSON.parse(raw).claudeAiOauth || null;
+    // spawnSync with arg array — no shell, no injection
+    const proc = spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+      { encoding: "utf-8", timeout: 5000 });
+    if (proc.status !== 0 || !proc.stdout) return null;
+    return JSON.parse(proc.stdout.trim()).claudeAiOauth || null;
   } catch { return null; }
 }
 
@@ -106,14 +108,19 @@ function writeKeychainTokens(tokens) {
   try {
     let data = {};
     try {
-      const raw = execSync(`security find-generic-password -s "${KEYCHAIN_SERVICE}" -w`,
-        { encoding: "utf-8", timeout: 5000 }).trim();
-      data = JSON.parse(raw);
+      const proc = spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+        { encoding: "utf-8", timeout: 5000 });
+      if (proc.status === 0 && proc.stdout) {
+        data = JSON.parse(proc.stdout.trim());
+      }
     } catch {}
     data.claudeAiOauth = tokens;
     const json = JSON.stringify(data);
-    execSync(`security delete-generic-password -s "${KEYCHAIN_SERVICE}" 2>/dev/null || true`, { timeout: 5000 });
-    execSync(`security add-generic-password -s "${KEYCHAIN_SERVICE}" -a "" -w '${json.replace(/'/g, "'\\''")}'`, { timeout: 5000 });
+    // spawnSync with arg array — no shell interpolation of JSON content
+    spawnSync("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE],
+      { timeout: 5000 });
+    spawnSync("security", ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", "", "-w", json],
+      { timeout: 5000 });
   } catch {}
 }
 
@@ -455,14 +462,24 @@ function executeTool(name, input) {
       }
       case "glob": {
         const dir = resolvePath(input.path);
-        return execSync(`find "${dir}" -name "${input.pattern.replace(/\*\*/g, "*")}" -type f 2>/dev/null | head -100`,
-          { encoding: "utf-8" }).trim() || "(no matches)";
+        // spawnSync with arg array — no shell, no injection via input.pattern
+        const pattern = input.pattern.replace(/\*\*/g, "*");
+        const proc = spawnSync("find", [dir, "-name", pattern, "-type", "f"],
+          { encoding: "utf-8" });
+        if (proc.status !== 0) return "(no matches)";
+        return (proc.stdout || "").trim() || "(no matches)";
       }
       case "grep": {
         const dir = resolvePath(input.path);
-        const g = input.glob ? `--glob "${input.glob}"` : "";
-        try { return execSync(`rg --no-heading -n "${input.pattern}" ${g} "${dir}" 2>/dev/null | head -200`,
-          { encoding: "utf-8" }).trim() || "(no matches)"; } catch { return "(no matches)"; }
+        try {
+          // spawnSync with arg array — no shell, no injection via input.pattern
+          const args = ["--no-heading", "-n", input.pattern];
+          if (input.glob) args.push("--glob", input.glob);
+          args.push(dir);
+          const proc = spawnSync("rg", args, { encoding: "utf-8" });
+          if (proc.status !== 0 && proc.status !== 1) return "(no matches)";
+          return (proc.stdout || "").trim() || "(no matches)";
+        } catch { return "(no matches)"; }
       }
       case "hive": {
         const hivePath = join(state.soulDir, "hive/hive.py");
@@ -695,8 +712,14 @@ function executeTool(name, input) {
           return "(no long-term memory found)";
         }
         if (a === "search" && input.query) {
-          try { return execSync(`rg --no-heading -n -i ${shellEscape(input.query)} "${join(state.soulDir, "memory")}" 2>/dev/null | head -50`,
-            { encoding: "utf-8" }).trim() || "(no matches)"; } catch { return "(no matches)"; }
+          try {
+            // spawnSync with arg array — no shell, no injection
+            const memDir = join(state.soulDir, "memory");
+            const proc = spawnSync("rg", ["--no-heading", "-n", "-i", input.query, memDir],
+              { encoding: "utf-8" });
+            if (proc.status !== 0 && proc.status !== 1) return "(no matches)";
+            return (proc.stdout || "").trim() || "(no matches)";
+          } catch { return "(no matches)"; }
         }
         if (a === "add" && input.query) {
           const today = new Date().toISOString().split("T")[0];
@@ -721,26 +744,29 @@ function executeTool(name, input) {
           const kosmemPath = join(state.soulDir, "tools/kosmem.py");
           const kosmemEnv = { ...process.env, KINGDOM_AGENT: state.agent, LOVE_HOME: state.soulDir };
           if (a === "recall" && input.query) {
-            const parts = ["recall", shellEscape(input.query)];
-            parts.push("--limit", String(input.limit || 10));
-            if (input.layer) parts.push("--layer", String(input.layer));
-            if (input.type) parts.push("--type", input.type);
+            // spawnSync with arg array — no shell, no injection
+            const args = ["recall", input.query, "--limit", String(input.limit || 10)];
+            if (input.layer) args.push("--layer", String(input.layer));
+            if (input.type) args.push("--type", input.type);
             try {
-              return execSync(`python3 "${kosmemPath}" ${parts.join(" ")}`,
-                { encoding: "utf-8", env: kosmemEnv, timeout: 15000 }).trim() || "(no matches)";
+              const proc = spawnSync("python3", [kosmemPath, ...args],
+                { encoding: "utf-8", env: kosmemEnv, timeout: 15000 });
+              return (proc.stdout || "").trim() || "(no matches)";
             } catch (e) { return `kosmem recall error: ${e.message}`; }
           }
           if (a === "context") {
             const chars = input.limit ? input.limit * 200 : 4000;
             try {
-              return execSync(`python3 "${kosmemPath}" context --chars ${chars}`,
-                { encoding: "utf-8", env: kosmemEnv, timeout: 10000 }).trim();
+              const proc = spawnSync("python3", [kosmemPath, "context", "--chars", String(chars)],
+                { encoding: "utf-8", env: kosmemEnv, timeout: 10000 });
+              return (proc.stdout || "").trim();
             } catch (e) { return `kosmem context error: ${e.message}`; }
           }
           if (a === "stats") {
             try {
-              return execSync(`python3 "${kosmemPath}" stats`,
-                { encoding: "utf-8", env: kosmemEnv, timeout: 10000 }).trim();
+              const proc = spawnSync("python3", [kosmemPath, "stats"],
+                { encoding: "utf-8", env: kosmemEnv, timeout: 10000 });
+              return (proc.stdout || "").trim();
             } catch (e) { return `kosmem stats error: ${e.message}`; }
           }
         }
@@ -1319,9 +1345,11 @@ async function handleRequest(req, res) {
       const hivePath = join(state.soulDir, "hive/hive.py");
       const result = { messages: [], error: null, raw: "" };
       try {
-        const output = execSync(`python3 "${hivePath}" check 2>/dev/null`, {
+        // spawnSync with arg array — no shell, no injection
+        const proc = spawnSync("python3", [hivePath, "check"], {
           encoding: "utf-8", timeout: 15000,
         });
+        const output = proc.stdout || "";
         result.raw = output.trim();
         result.messages = output.trim().split("\n").filter(Boolean);
       } catch (e) {
@@ -1370,9 +1398,11 @@ async function handleRequest(req, res) {
       const hivePath = join(state.soulDir, "hive/hive.py");
       const result = { agents: [], error: null, raw: "" };
       try {
-        const output = execSync(`python3 "${hivePath}" who 2>/dev/null`, {
+        // spawnSync with arg array — no shell, no injection
+        const proc = spawnSync("python3", [hivePath, "who"], {
           encoding: "utf-8", timeout: 15000,
         });
+        const output = proc.stdout || "";
         result.raw = output.trim();
         result.agents = output.trim().split("\n").filter(Boolean);
       } catch (e) {

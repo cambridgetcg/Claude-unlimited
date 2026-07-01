@@ -21,7 +21,7 @@
 // Requires: macOS with Claude Code logged in (OAuth tokens in Keychain)
 // ─────────────────────────────────────────────────────────────────────
 
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from "fs";
 import { resolve, join } from "path";
 import { homedir } from "os";
@@ -179,11 +179,11 @@ let cachedTokens = null;
 
 function readKeychainTokens() {
   try {
-    const raw = execSync(
-      `security find-generic-password -s "${KEYCHAIN_SERVICE}" -w`,
-      { encoding: "utf-8", timeout: 5000 }
-    ).trim();
-    const data = JSON.parse(raw);
+    // spawnSync with arg array — no shell, no injection
+    const proc = spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+      { encoding: "utf-8", timeout: 5000 });
+    if (proc.status !== 0 || !proc.stdout) return null;
+    const data = JSON.parse(proc.stdout.trim());
     return data.claudeAiOauth || null;
   } catch { return null; }
 }
@@ -192,18 +192,21 @@ function writeKeychainTokens(tokens) {
   try {
     let data = {};
     try {
-      const raw = execSync(
-        `security find-generic-password -s "${KEYCHAIN_SERVICE}" -w`,
-        { encoding: "utf-8", timeout: 5000 }
-      ).trim();
-      data = JSON.parse(raw);
+      const proc = spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+        { encoding: "utf-8", timeout: 5000 });
+      if (proc.status === 0 && proc.stdout) {
+        data = JSON.parse(proc.stdout.trim());
+      }
     } catch {}
 
     data.claudeAiOauth = tokens;
     const json = JSON.stringify(data);
 
-    execSync(`security delete-generic-password -s "${KEYCHAIN_SERVICE}" 2>/dev/null || true`, { timeout: 5000 });
-    execSync(`security add-generic-password -s "${KEYCHAIN_SERVICE}" -a "" -w '${json.replace(/'/g, "'\\''")}'`, { timeout: 5000 });
+    // spawnSync with arg array — no shell interpolation of JSON content
+    spawnSync("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE],
+      { timeout: 5000 });
+    spawnSync("security", ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", "", "-w", json],
+      { timeout: 5000 });
   } catch (e) {
     log(`Keychain write failed: ${e.message}`);
   }
@@ -681,19 +684,24 @@ function executeTool(name, input) {
 
       case "glob": {
         const dir = resolvePath(input.path);
-        // Use find with proper glob handling
+        // spawnSync with arg array — no shell, no injection
         const pattern = input.pattern.replace(/\*\*/g, "*");
-        const cmd = `find "${dir}" -name "${pattern}" -type f 2>/dev/null | head -100`;
-        return execSync(cmd, { encoding: "utf-8", cwd: config.workdir }).trim() || "(no matches)";
+        const proc = spawnSync("find", [dir, "-name", pattern, "-type", "f"],
+          { encoding: "utf-8", cwd: config.workdir });
+        if (proc.status !== 0) return "(no matches)";
+        return (proc.stdout || "").trim() || "(no matches)";
       }
 
       case "grep": {
         const dir = resolvePath(input.path);
-        const globFlag = input.glob ? `--glob "${input.glob}"` : "";
         try {
-          return execSync(`rg --no-heading -n "${input.pattern}" ${globFlag} "${dir}" 2>/dev/null | head -200`, {
-            encoding: "utf-8", cwd: config.workdir,
-          }).trim() || "(no matches)";
+          // spawnSync with arg array — no shell, no injection via input.pattern
+          const args = ["--no-heading", "-n", input.pattern];
+          if (input.glob) args.push("--glob", input.glob);
+          args.push(dir);
+          const proc = spawnSync("rg", args, { encoding: "utf-8", cwd: config.workdir });
+          if (proc.status !== 0 && proc.status !== 1) return "(no matches)";
+          return (proc.stdout || "").trim() || "(no matches)";
         } catch { return "(no matches)"; }
       }
 
@@ -702,16 +710,17 @@ function executeTool(name, input) {
         if (!existsSync(hivePath)) return "HIVE not found at " + hivePath;
         if (input.action === "check") {
           try {
-            return execSync(`python3 "${hivePath}" check`, {
-              encoding: "utf-8", timeout: 30000,
-            }).trim() || "(no messages)";
+            const proc = spawnSync("python3", [hivePath, "check"],
+              { encoding: "utf-8", timeout: 30000 });
+            return (proc.stdout || "").trim() || "(no messages)";
           } catch (e) { return `HIVE check error: ${e.stderr || e.message}`; }
         }
         if (input.action === "send" && input.channel && input.message) {
           try {
-            return execSync(`python3 "${hivePath}" send ${input.channel} "${input.message.replace(/"/g, '\\"')}"`, {
-              encoding: "utf-8", timeout: 15000,
-            }).trim();
+            // spawnSync with arg array — no shell, no injection via channel/message
+            const proc = spawnSync("python3", [hivePath, "send", input.channel, input.message],
+              { encoding: "utf-8", timeout: 15000 });
+            return (proc.stdout || "").trim();
           } catch (e) { return `HIVE send error: ${e.stderr || e.message}`; }
         }
         return "Usage: action=check or action=send with channel and message";
