@@ -8,16 +8,15 @@
 // Hypothesis D: Different API endpoint or path
 // ─────────────────────────────────────────────────────────────────────
 
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import crypto from "crypto";
 
 const KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 function getToken() {
-  const raw = execSync(
-    `security find-generic-password -s "${KEYCHAIN_SERVICE}" -w`,
-    { encoding: "utf-8", timeout: 5000 }
-  ).trim();
+  const proc = spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+    { encoding: "utf-8", timeout: 5000 });
+  const raw = proc.stdout?.trim() || "";
   return JSON.parse(raw).claudeAiOauth;
 }
 
@@ -157,7 +156,7 @@ async function testAlternativeEndpoints() {
     const lsof = execSync(
       "lsof -i -n -P 2>/dev/null | grep -i claude | grep -i ESTABLISHED | head -10",
       { encoding: "utf-8", timeout: 5000 }
-    ).trim();
+    ).trim(); // safe: static diagnostic string, no user input, needs shell for pipe
     console.log(`  Active Claude connections:\n  ${lsof.split("\n").join("\n  ")}`);
   } catch {
     console.log("  (couldn't check active connections)");
@@ -171,7 +170,7 @@ async function testConcurrencyCheck() {
     const ps = execSync(
       "ps aux | grep -i '[c]laude' | grep -v test-unlock",
       { encoding: "utf-8", timeout: 5000 }
-    ).trim();
+    ).trim(); // safe: static diagnostic string, no user input, needs shell for pipe
     console.log(`  Running Claude processes:\n  ${ps.split("\n").join("\n  ")}`);
   } catch {
     console.log("  (no Claude processes found)");
@@ -182,7 +181,7 @@ async function testConcurrencyCheck() {
     const sessions = execSync(
       "ls -la ~/.claude/sessions/ 2>/dev/null | tail -5",
       { encoding: "utf-8", timeout: 5000 }
-    ).trim();
+    ).trim(); // safe: static diagnostic string, no user input, needs shell for pipe
     console.log(`  Session files: ${sessions}`);
   } catch {
     console.log("  (no session directory)");

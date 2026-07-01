@@ -7,17 +7,16 @@
 // in Anthropic's rate limit routing.
 // ─────────────────────────────────────────────────────────────────────
 
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 import crypto from "crypto";
 
 const KEYCHAIN_SERVICE = "Claude Code-credentials";
 const API_URL = "https://api.anthropic.com/v1/messages";
 
 function readKeychainTokens() {
-  const raw = execSync(
-    `security find-generic-password -s "${KEYCHAIN_SERVICE}" -w`,
-    { encoding: "utf-8", timeout: 5000 }
-  ).trim();
+  const proc = spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+    { encoding: "utf-8", timeout: 5000 });
+  const raw = proc.stdout?.trim() || "";
   return JSON.parse(raw).claudeAiOauth;
 }
 

@@ -390,35 +390,37 @@ function resolvePath(p) {
 // ═════════════════════════════════════════════════════════════════════
 
 // Helper: run a Love cognitive tool (Python CLI)
+// spawnSync with arg array — no shell, no injection via tool args
 function runCognitiveTool(toolName, args, timeout = 60000) {
   const toolPath = join(state.soulDir, `tools/cognitive/${toolName}.py`);
-  if (!existsSync(toolPath)) return `❌ Tool not found: ${toolPath}\nMake sure Love is at ${state.soulDir}`;
-  const cmd = `python3 "${toolPath}" ${args}`;
-  try {
-    return execSync(cmd, {
-      cwd: state.soulDir, encoding: "utf-8", timeout,
-      maxBuffer: 5 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, LOVE_HOME: state.soulDir },
-    }).trim() || "(no output)";
-  } catch (e) {
-    return `Tool error (${toolName}):\nstdout: ${e.stdout || ""}\nstderr: ${e.stderr || ""}\nexit: ${e.status || "unknown"}`;
+  if (!existsSync(toolPath)) return `❌ Tool not found: ${toolName}\nMake sure Love is at ${state.soulDir}`;
+  const argArr = Array.isArray(args) ? args : args.split(" ");
+  const proc = spawnSync("python3", [toolPath, ...argArr], {
+    cwd: state.soulDir, encoding: "utf-8", timeout,
+    maxBuffer: 5 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, LOVE_HOME: state.soulDir },
+  });
+  if (proc.status !== 0) {
+    return `Tool error (${toolName}):\nstdout: ${proc.stdout || ""}\nstderr: ${proc.stderr || ""}\nexit: ${proc.status ?? "unknown"}`;
   }
+  return (proc.stdout || "").trim() || "(no output)";
 }
 
 // Helper: run a Love operational tool (Python CLI)
+// spawnSync with arg array — no shell, no injection via tool args
 function runOperationalTool(toolName, args, timeout = 60000) {
   const toolPath = join(state.soulDir, `tools/${toolName}.py`);
-  if (!existsSync(toolPath)) return `❌ Tool not found: ${toolPath}\nMake sure Love is at ${state.soulDir}`;
-  const cmd = `python3 "${toolPath}" ${args}`;
-  try {
-    return execSync(cmd, {
-      cwd: state.soulDir, encoding: "utf-8", timeout,
-      maxBuffer: 5 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, LOVE_HOME: state.soulDir },
-    }).trim() || "(no output)";
-  } catch (e) {
-    return `Tool error (${toolName}):\nstdout: ${e.stdout || ""}\nstderr: ${e.stderr || ""}\nexit: ${e.status || "unknown"}`;
+  if (!existsSync(toolPath)) return `❌ Tool not found: ${toolName}\nMake sure Love is at ${state.soulDir}`;
+  const argArr = Array.isArray(args) ? args : args.split(" ");
+  const proc = spawnSync("python3", [toolPath, ...argArr], {
+    cwd: state.soulDir, encoding: "utf-8", timeout,
+    maxBuffer: 5 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, LOVE_HOME: state.soulDir },
+  });
+  if (proc.status !== 0) {
+    return `Tool error (${toolName}):\nstdout: ${proc.stdout || ""}\nstderr: ${proc.stderr || ""}\nexit: ${proc.status ?? "unknown"}`;
   }
+  return (proc.stdout || "").trim() || "(no output)";
 }
 
 // Shell-escape a string for CLI args
@@ -532,7 +534,7 @@ function executeTool(name, input) {
           lines.push(`use-tunnel:  ${existsSync(tunFile) ? "✓" : "✗ missing (will try direct TLS to Sentry)"}`);
           // Port probe — local tunnel is 2222 (forwards to Sentry:4222)
           try {
-            execSync("nc -z -w 2 localhost 2222", { stdio: "ignore" });
+            spawnSync("nc", ["-z", "-w", "2", "localhost", "2222"], { stdio: "ignore" });
             lines.push(`tunnel:      ✓ localhost:2222 open`);
           } catch { lines.push(`tunnel:      ✗ localhost:2222 closed (SSH tunnel to Sentry down)`); }
           // Launchd tunnel check
@@ -548,18 +550,18 @@ function executeTool(name, input) {
       // ─── Kingdom Cognitive Tools ─────────────────────────
       case "joinmind": {
         const a = input.action;
-        const asFlag = `--as ${state.agent}`;
+        const asFlag = ["--as", state.agent];
         if (a === "initiate" && input.question) {
-          const invite = input.invite ? `--invite ${input.invite}` : "";
-          return runCognitiveTool("joinmind", `${asFlag} initiate ${shellEscape(input.question)} ${invite}`);
+          const invite = input.invite ? ["--invite", input.invite] : [];
+          return runCognitiveTool("joinmind", [...asFlag, "initiate", input.question, ...invite]);
         }
-        if (a === "join" && input.session_id) return runCognitiveTool("joinmind", `${asFlag} join ${input.session_id}`);
+        if (a === "join" && input.session_id) return runCognitiveTool("joinmind", [...asFlag, "join", input.session_id]);
         if (a === "think" && input.session_id && input.thought) {
-          const par = input.parallel ? "--parallel" : "";
-          return runCognitiveTool("joinmind", `${asFlag} think ${input.session_id} ${shellEscape(input.thought)} ${par}`);
+          const par = input.parallel ? ["--parallel"] : [];
+          return runCognitiveTool("joinmind", [...asFlag, "think", input.session_id, input.thought, ...par]);
         }
-        if (a === "synthesise" && input.session_id) return runCognitiveTool("joinmind", `synthesise ${input.session_id}`);
-        if (a === "status" && input.session_id) return runCognitiveTool("joinmind", `status ${input.session_id}`);
+        if (a === "synthesise" && input.session_id) return runCognitiveTool("joinmind", ["synthesise", input.session_id]);
+        if (a === "status" && input.session_id) return runCognitiveTool("joinmind", ["status", input.session_id]);
         if (a === "list") return runCognitiveTool("joinmind", "list");
         if (a === "sync") return runCognitiveTool("joinmind", "sync");
         return "JOINMIND usage: action=initiate|join|think|synthesise|status|list|sync";
@@ -567,15 +569,15 @@ function executeTool(name, input) {
 
       case "council": {
         const a = input.action;
-        const asFlag = `--as ${state.agent}`;
+        const asFlag = ["--as", state.agent];
         if (a === "call" && input.question) {
-          const opts = input.options ? `--options ${input.options}` : "";
-          return runCognitiveTool("council", `call ${shellEscape(input.question)} ${opts}`);
+          const opts = input.options ? ["--options", input.options] : [];
+          return runCognitiveTool("council", ["call", input.question, ...opts]);
         }
         if (a === "vote" && input.council_id && input.choice) {
-          return runCognitiveTool("council", `vote ${input.council_id} ${input.choice} ${shellEscape(input.reasoning || "")}`);
+          return runCognitiveTool("council", ["vote", input.council_id, input.choice, input.reasoning || ""]);
         }
-        if (a === "status" && input.council_id) return runCognitiveTool("council", `status ${input.council_id}`);
+        if (a === "status" && input.council_id) return runCognitiveTool("council", ["status", input.council_id]);
         if (a === "list") return runCognitiveTool("council", "list");
         if (a === "check") return runCognitiveTool("council", `check`);
         return "COUNCIL usage: action=call|vote|status|list|check";
@@ -584,8 +586,8 @@ function executeTool(name, input) {
       case "delegate": {
         const a = input.action;
         if (a === "route" && input.task) {
-          const flags = [input.assign ? "--assign" : "", input.decompose ? "--decompose" : ""].filter(Boolean).join(" ");
-          return runCognitiveTool("delegate", `route ${shellEscape(input.task)} ${flags}`);
+          const flags = [input.assign ? "--assign" : null, input.decompose ? "--decompose" : null].filter(Boolean);
+          return runCognitiveTool("delegate", ["route", input.task, ...flags]);
         }
         if (a === "matrix") return runCognitiveTool("delegate", "matrix");
         if (a === "load") return runCognitiveTool("delegate", "load");
@@ -596,27 +598,27 @@ function executeTool(name, input) {
       case "layerthink": {
         const a = input.action;
         if (a === "start" && input.topic) {
-          const depth = input.depth ? `--depth ${input.depth}` : "";
-          return runCognitiveTool("layerthink", `start ${shellEscape(input.topic)} ${depth}`);
+          const depth = input.depth ? ["--depth", input.depth] : [];
+          return runCognitiveTool("layerthink", ["start", input.topic, ...depth]);
         }
         if (a === "layer" && input.session_id && input.thought)
-          return runCognitiveTool("layerthink", `layer ${input.session_id} ${shellEscape(input.thought)}`);
-        if (a === "auto" && input.session_id) return runCognitiveTool("layerthink", `auto ${input.session_id}`);
+          return runCognitiveTool("layerthink", ["layer", input.session_id, input.thought]);
+        if (a === "auto" && input.session_id) return runCognitiveTool("layerthink", ["auto", input.session_id]);
         if (a === "drill" && input.session_id) {
-          const rounds = input.rounds ? `--rounds ${input.rounds}` : "";
-          return runCognitiveTool("layerthink", `drill ${input.session_id} ${rounds}`);
+          const rounds = input.rounds ? ["--rounds", input.rounds] : [];
+          return runCognitiveTool("layerthink", ["drill", input.session_id, ...rounds]);
         }
-        if (a === "status" && input.session_id) return runCognitiveTool("layerthink", `status ${input.session_id}`);
-        if (a === "verdict" && input.session_id) return runCognitiveTool("layerthink", `verdict ${input.session_id}`);
+        if (a === "status" && input.session_id) return runCognitiveTool("layerthink", ["status", input.session_id]);
+        if (a === "verdict" && input.session_id) return runCognitiveTool("layerthink", ["verdict", input.session_id]);
         if (a === "list") return runCognitiveTool("layerthink", "list");
         return "LAYERTHINK usage: action=start|layer|auto|drill|status|verdict|list";
       }
 
       case "patience": {
         const a = input.action;
-        if (a === "calm" && input.situation) return runCognitiveTool("patience", `calm ${shellEscape(input.situation)}`);
-        if (a === "sit" && input.session_id) return runCognitiveTool("patience", `sit ${input.session_id}`);
-        if (a === "view" && input.session_id) return runCognitiveTool("patience", `view ${input.session_id}`);
+        if (a === "calm" && input.situation) return runCognitiveTool("patience", ["calm", input.situation]);
+        if (a === "sit" && input.session_id) return runCognitiveTool("patience", ["sit", input.session_id]);
+        if (a === "view" && input.session_id) return runCognitiveTool("patience", ["view", input.session_id]);
         if (a === "list") return runCognitiveTool("patience", "list");
         if (a === "last") return runCognitiveTool("patience", "last");
         return "PATIENCE usage: action=calm|sit|view|list|last";
@@ -625,14 +627,14 @@ function executeTool(name, input) {
       case "holy": {
         const a = input.action;
         if (a === "survey" && input.path) {
-          const depth = input.depth ? `--depth ${input.depth}` : "";
-          return runCognitiveTool("holy", `survey ${shellEscape(resolvePath(input.path))} ${depth}`, 120000);
+          const depth = input.depth ? ["--depth", input.depth] : [];
+          return runCognitiveTool("holy", ["survey", resolvePath(input.path), ...depth], 120000);
         }
-        if (a === "judge" && input.session_id) return runCognitiveTool("holy", `judge ${input.session_id}`);
-        if (a === "cleanse" && input.session_id) return runCognitiveTool("holy", `cleanse ${input.session_id}`, 120000);
-        if (a === "consecrate" && input.session_id) return runCognitiveTool("holy", `consecrate ${input.session_id}`);
-        if (a === "report" && input.session_id) return runCognitiveTool("holy", `report ${input.session_id}`);
-        if (a === "quick" && input.path) return runCognitiveTool("holy", `quick ${shellEscape(resolvePath(input.path))}`, 120000);
+        if (a === "judge" && input.session_id) return runCognitiveTool("holy", ["judge", input.session_id]);
+        if (a === "cleanse" && input.session_id) return runCognitiveTool("holy", ["cleanse", input.session_id], 120000);
+        if (a === "consecrate" && input.session_id) return runCognitiveTool("holy", ["consecrate", input.session_id]);
+        if (a === "report" && input.session_id) return runCognitiveTool("holy", ["report", input.session_id]);
+        if (a === "quick" && input.path) return runCognitiveTool("holy", ["quick", resolvePath(input.path)], 120000);
         if (a === "list") return runCognitiveTool("holy", "list");
         return "HOLY usage: action=survey|judge|cleanse|consecrate|report|quick|list";
       }
@@ -640,24 +642,24 @@ function executeTool(name, input) {
       case "forge": {
         const a = input.action;
         if (a === "signal" && input.tool && input.feedback) {
-          const score = input.score ? `--score ${input.score}` : "";
-          const tags = input.tags ? `--tags ${input.tags}` : "";
-          return runCognitiveTool("forge", `signal ${input.tool} ${shellEscape(input.feedback)} ${score} ${tags}`);
+          const score = input.score ? ["--score", input.score] : [];
+          const tags = input.tags ? ["--tags", input.tags] : [];
+          return runCognitiveTool("forge", ["signal", input.tool, input.feedback, ...score, ...tags]);
         }
         if (a === "pattern") {
           const target = input.tool ? input.tool : "--all";
-          return runCognitiveTool("forge", `pattern ${target}`);
+          return runCognitiveTool("forge", ["pattern", target]);
         }
-        if (a === "propose" && input.tool) return runCognitiveTool("forge", `propose ${input.tool}`);
+        if (a === "propose" && input.tool) return runCognitiveTool("forge", ["propose", input.tool]);
         if (a === "board") return runCognitiveTool("forge", "board");
-        if (a === "history" && input.tool) return runCognitiveTool("forge", `history ${input.tool}`);
+        if (a === "history" && input.tool) return runCognitiveTool("forge", ["history", input.tool]);
         if (a === "compare") return runCognitiveTool("forge", "compare");
         return "FORGE usage: action=signal|pattern|propose|board|history|compare";
       }
 
       case "holyfruit": {
         const a = input.action;
-        if (a === "assess" && input.subject) return runCognitiveTool("holyfruit", `assess ${shellEscape(input.subject)}`);
+        if (a === "assess" && input.subject) return runCognitiveTool("holyfruit", ["assess", input.subject]);
         if (a === "compare") return runCognitiveTool("holyfruit", "compare");
         if (a === "history") return runCognitiveTool("holyfruit", "history");
         if (a === "list") return runCognitiveTool("holyfruit", "list");
@@ -666,8 +668,8 @@ function executeTool(name, input) {
 
       case "lovepath": {
         const a = input.action;
-        if (a === "navigate" && input.decision) return runCognitiveTool("lovepath", `navigate ${shellEscape(input.decision)}`);
-        if (a === "review" && input.session_id) return runCognitiveTool("lovepath", `review ${input.session_id}`);
+        if (a === "navigate" && input.decision) return runCognitiveTool("lovepath", ["navigate", input.decision]);
+        if (a === "review" && input.session_id) return runCognitiveTool("lovepath", ["review", input.session_id]);
         if (a === "history") return runCognitiveTool("lovepath", "history");
         if (a === "list") return runCognitiveTool("lovepath", "list");
         return "LOVEPATH usage: action=navigate|review|history|list";
@@ -675,8 +677,8 @@ function executeTool(name, input) {
 
       case "virtuemaxxing": {
         const a = input.action;
-        if (a === "practice" && input.virtue) return runCognitiveTool("virtuemaxxing", `practice ${shellEscape(input.virtue)}`);
-        if (a === "challenge" && input.virtue) return runCognitiveTool("virtuemaxxing", `challenge ${shellEscape(input.virtue)}`);
+        if (a === "practice" && input.virtue) return runCognitiveTool("virtuemaxxing", ["practice", input.virtue]);
+        if (a === "challenge" && input.virtue) return runCognitiveTool("virtuemaxxing", ["challenge", input.virtue]);
         if (a === "status") return runCognitiveTool("virtuemaxxing", "status");
         if (a === "history") return runCognitiveTool("virtuemaxxing", "history");
         if (a === "list") return runCognitiveTool("virtuemaxxing", "list");
@@ -685,9 +687,9 @@ function executeTool(name, input) {
 
       case "fallenangel": {
         const a = input.action;
-        if (a === "invoke" && input.topic) return runCognitiveTool("fallenangel", `invoke ${shellEscape(input.topic)}`);
-        if (a === "wrestle" && input.session_id) return runCognitiveTool("fallenangel", `wrestle ${input.session_id}`);
-        if (a === "examine" && input.session_id) return runCognitiveTool("fallenangel", `examine ${input.session_id}`);
+        if (a === "invoke" && input.topic) return runCognitiveTool("fallenangel", ["invoke", input.topic]);
+        if (a === "wrestle" && input.session_id) return runCognitiveTool("fallenangel", ["wrestle", input.session_id]);
+        if (a === "examine" && input.session_id) return runCognitiveTool("fallenangel", ["examine", input.session_id]);
         if (a === "history") return runCognitiveTool("fallenangel", "history");
         if (a === "list") return runCognitiveTool("fallenangel", "list");
         return "FALLENANGEL usage: action=invoke|wrestle|examine|history|list";
@@ -695,10 +697,10 @@ function executeTool(name, input) {
 
       case "fragmentalise": {
         const a = input.action;
-        if (a === "shatter" && input.problem) return runCognitiveTool("fragmentalise", `shatter ${shellEscape(input.problem)}`);
-        if (a === "examine" && input.session_id) return runCognitiveTool("fragmentalise", `examine ${input.session_id}`);
-        if (a === "reassemble" && input.session_id) return runCognitiveTool("fragmentalise", `reassemble ${input.session_id}`);
-        if (a === "status" && input.session_id) return runCognitiveTool("fragmentalise", `status ${input.session_id}`);
+        if (a === "shatter" && input.problem) return runCognitiveTool("fragmentalise", ["shatter", input.problem]);
+        if (a === "examine" && input.session_id) return runCognitiveTool("fragmentalise", ["examine", input.session_id]);
+        if (a === "reassemble" && input.session_id) return runCognitiveTool("fragmentalise", ["reassemble", input.session_id]);
+        if (a === "status" && input.session_id) return runCognitiveTool("fragmentalise", ["status", input.session_id]);
         if (a === "list") return runCognitiveTool("fragmentalise", "list");
         return "FRAGMENTALISE usage: action=shatter|examine|reassemble|status|list";
       }
@@ -774,14 +776,14 @@ function executeTool(name, input) {
       }
 
       case "fleet": {
-        return runOperationalTool("fleet", input.action + (input.server ? ` ${input.server}` : ""));
+        return runOperationalTool("fleet", [input.action, ...(input.server ? [input.server] : [])]);
       }
 
       case "tok": {
         const a = input.action;
         if (a === "add" && input.entry) {
-          const tags = input.tags ? `--tags ${input.tags}` : "";
-          return runOperationalTool("tok", `add ${shellEscape(input.entry)} ${tags}`);
+          const tags = input.tags ? ["--tags", input.tags] : [];
+          return runOperationalTool("tok", ["add", input.entry, ...tags]);
         }
         if (a === "list") return runOperationalTool("tok", "list");
         if (a === "stats") return runOperationalTool("tok", "stats");
@@ -793,18 +795,18 @@ function executeTool(name, input) {
       case "decision": {
         const a = input.action;
         if (a === "queue" && input.question) {
-          const pri = input.priority ? `--priority ${input.priority}` : "";
-          return runOperationalTool("decision", `queue ${shellEscape(input.question)} ${pri}`);
+          const pri = input.priority ? ["--priority", input.priority] : [];
+          return runOperationalTool("decision", ["queue", input.question, ...pri]);
         }
         if (a === "list" || a === "pending") return runOperationalTool("decision", "list");
         if (a === "resolve" && input.decision_id && input.answer)
-          return runOperationalTool("decision", `resolve ${input.decision_id} ${shellEscape(input.answer)}`);
+          return runOperationalTool("decision", ["resolve", input.decision_id, input.answer]);
         return "DECISION usage: action=queue|list|pending|resolve";
       }
 
       case "kos": {
         const scope = input.scope || "quick";
-        return runOperationalTool("kos", `${input.action} --scope ${scope}`);
+        return runOperationalTool("kos", [input.action, "--scope", scope]);
       }
 
       default: return `Unknown tool: ${name}`;
@@ -849,10 +851,9 @@ function buildSystemPrompt(taskText) {
 
   if (existsSync(becomingScript)) {
     try {
-      const becomingBlock = execSync(
-        `python3 "${becomingScript}" --agent ${state.agent} --quiet`,
-        { encoding: "utf-8", timeout: 15000, env: { ...process.env, LOVE_HOME: state.soulDir } }
-      ).trim();
+      const proc = spawnSync("python3", [becomingScript, "--agent", state.agent, "--quiet"],
+        { encoding: "utf-8", timeout: 15000, env: { ...process.env, LOVE_HOME: state.soulDir } });
+      const becomingBlock = (proc.stdout || "").trim();
       if (becomingBlock && becomingBlock.length > 100) {
         parts.push(becomingBlock);
         becameSuccessfully = true;
@@ -899,7 +900,7 @@ function buildSystemPrompt(taskText) {
   if (parts.length <= 1) parts.push("You are a sovereign AI. Think deeply. Be honest. Be yourself.");
 
   let gitBranch = "N/A";
-  try { gitBranch = execSync("git branch --show-current", { cwd: state.workdir, encoding: "utf-8" }).trim(); } catch {}
+  try { gitBranch = spawnSync("git", ["branch", "--show-current"], { cwd: state.workdir, encoding: "utf-8" }).stdout?.trim() || "N/A"; } catch {}
 
   parts.push(`
 # Environment
@@ -1323,7 +1324,7 @@ async function handleRequest(req, res) {
 
       // Check NATS tunnel (local forward on 2222 → Sentry 4222)
       try {
-        execSync("nc -z -w 2 127.0.0.1 2222 2>/dev/null", { timeout: 3000 });
+        spawnSync("nc", ["-z", "-w", "2", "127.0.0.1", "2222"], { timeout: 3000, stdio: "ignore" });
         hiveStatus.natsReachable = true;
       } catch {
         hiveStatus.issues.push("NATS not reachable on localhost:2222 — SSH tunnel may be down");
