@@ -153,7 +153,11 @@ function parseState(statePath) {
       efficiency: state.efficiency || null,
       assistantText: allText,
     };
-  } catch { return null; }
+  } catch (e) {
+    // State file exists but parse failed — corrupt, not absent
+    console.error(`parseState: state file parse failed: ${e.message}`);
+    return null;
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════

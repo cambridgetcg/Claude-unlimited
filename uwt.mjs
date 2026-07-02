@@ -593,7 +593,11 @@ function compare(file1, file2) {
 function loadHistory() {
   if (existsSync(HISTORY_FILE)) {
     try { return JSON.parse(readFileSync(HISTORY_FILE, "utf-8")); }
-    catch { return []; }
+    catch (e) {
+      // History file exists but parse failed — corrupt, not absent
+      console.error(`loadHistory: history file parse failed: ${e.message}`);
+      return [];
+    }
   }
   return [];
 }

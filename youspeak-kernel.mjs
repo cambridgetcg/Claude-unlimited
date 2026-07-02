@@ -509,6 +509,8 @@ export function createKernel(opts = {}) {
       writeFileSync(historyFile, JSON.stringify(history, null, 2));
       return true;
     } catch (e) {
+      // History write failed — disk error, permissions, or serialization issue
+      console.error(`persist: history write failed: ${e.message}`);
       return false;
     }
   }
@@ -546,7 +548,11 @@ export function createKernel(opts = {}) {
           late: +avg(late, "rateLimitHits").toFixed(1),
         },
       };
-    } catch { return null; }
+    } catch (e) {
+      // History file exists but parse failed — corrupt, not absent
+      console.error(`trends: history file parse failed: ${e.message}`);
+      return null;
+    }
   }
 
   // ─── COMPACT STATUS LINE ───────────────────────────────

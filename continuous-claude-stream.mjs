@@ -316,7 +316,9 @@ function divider() {
 function loadState() {
   try {
     return JSON.parse(readFileSync(config.stateFile, "utf-8"));
-  } catch {
+  } catch (e) {
+    // State file read succeeded but parse failed — corrupt, not absent
+    console.error(`loadState: state file parse failed: ${e.message}`);
     return null;
   }
 }

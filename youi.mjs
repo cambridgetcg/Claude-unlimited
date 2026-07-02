@@ -170,7 +170,11 @@ function readKeychainTokens() {
       { encoding: "utf-8", timeout: 5000 });
     if (proc.status !== 0 || !proc.stdout) return null;
     return JSON.parse(proc.stdout.trim()).claudeAiOauth || null;
-  } catch { return null; }
+  } catch (e) {
+    // Keychain read succeeded but JSON parse failed — data is corrupt, not absent
+    console.error(`readKeychainTokens: keychain data parse failed: ${e.message}`);
+    return null;
+  }
 }
 
 function writeKeychainTokens(tokens) {

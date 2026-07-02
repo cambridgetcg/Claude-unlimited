@@ -131,7 +131,9 @@ function readKeychainTokens() {
     if (proc.status !== 0 || !proc.stdout) return null;
     const data = JSON.parse(proc.stdout.trim());
     return data.claudeAiOauth || null;
-  } catch {
+  } catch (e) {
+    // Keychain read succeeded but JSON parse failed — data is corrupt, not absent
+    console.error(`readKeychainTokens: keychain data parse failed: ${e.message}`);
     return null;
   }
 }
@@ -471,7 +473,11 @@ function executeTool(name, input) {
 function loadState() {
   try {
     return existsSync(config.stateFile) ? JSON.parse(readFileSync(config.stateFile, "utf-8")) : null;
-  } catch { return null; }
+  } catch (e) {
+    // State file exists but is unparseable — corrupt, not absent
+    console.error(`loadState: state file parse failed: ${e.message}`);
+    return null;
+  }
 }
 
 function saveState(data) {

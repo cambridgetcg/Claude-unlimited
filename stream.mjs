@@ -249,7 +249,11 @@ function pct(n) { return `${(n * 100).toFixed(0)}%`; }
 function loadState() {
   try {
     return existsSync(config.stateFile) ? JSON.parse(readFileSync(config.stateFile, "utf-8")) : null;
-  } catch { return null; }
+  } catch (e) {
+    // State file exists but is unparseable — corrupt, not absent
+    console.error(`loadState: state file parse failed: ${e.message}`);
+    return null;
+  }
 }
 
 function saveState(extra = {}) {
