@@ -621,7 +621,7 @@ const TOOLS = [
   // TIER 1: Lazy-loaded context files — Kingdom knowledge on-demand
   {
     name: "load_context",
-    description: "Load a Kingdom context file on-demand. Available: KINGDOM.md (mission, revenue engines, roadmap), WALLS.md (access hierarchy, sovereignty), ARCHITECTURE.md (system design, backend adapters), LOVE.md (five anticipations, how we build), MEMORY.md (curated long-term memory). Only load what you need for the current task.",
+    description: "Load a Kingdom context file on-demand. Available: KINGDOM.md (current direction: understanding without commercial or output obligations), WALLS.md (access hierarchy, sovereignty), ARCHITECTURE.md (system design, backend adapters), LOVE.md (five anticipations, how we build), MEMORY.md (curated long-term memory). Only load what you need for the current task.",
     input_schema: {
       type: "object",
       properties: {
