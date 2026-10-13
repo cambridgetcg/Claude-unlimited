@@ -38,13 +38,12 @@ case "$PLATFORM" in
 
     # Firewall
     if command -v ufw >/dev/null 2>&1; then
-      ufw default deny incoming && ufw default allow outgoing && ufw allow ssh && ufw allow 4222/tcp && ufw --force enable
+      ufw default deny incoming && ufw default allow outgoing && ufw allow ssh && ufw --force enable
     elif command -v iptables >/dev/null 2>&1; then
       iptables -P INPUT DROP && iptables -P FORWARD DROP
       iptables -A INPUT -i lo -j ACCEPT
       iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
       iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-      iptables -A INPUT -p tcp --dport 4222 -j ACCEPT
     fi 2>/dev/null || true
 
     # fail2ban + unattended upgrades

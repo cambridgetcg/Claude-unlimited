@@ -20,7 +20,6 @@
 #   04. Generates SSH keys, HIVE encryption key, git identity
 #   05. Security hardening (firewall, KOS policies, integrity baseline)
 #   06. Memory system (daily notes, long-term, dev-state, metrics)
-#   07. HIVE communication (SSH tunnel to NATS on Sentry)
 #   08. Heartbeat daemon (7-min agent cycle) + KOS compliance daemon
 #   09. Browser capabilities (headless Chromium, Playwright, YOUI Web)
 #   10. Auto-boot (tty1 auto-login → YOUI on Linux, launchd on macOS)
@@ -119,7 +118,7 @@ export UNLIMITED_DIR="${HOME_DIR}/Claude-unlimited"
 # MODULE LIST
 # ═════════════════════════════════════════════════════════════════════
 
-ALL_MODULES="00 01 02 03 04 05 06 07 08 09 10 11 12"
+ALL_MODULES="00 01 02 03 04 05 06 08 09 10 11 12"
 MODULE_NAMES="
 00-base:       System packages (Node, Python, Git, Chromium)
 01-user:       Kingdom user + shell environment
@@ -128,7 +127,6 @@ MODULE_NAMES="
 04-keys:       SSH key, HIVE encryption key, git identity
 05-security:   Firewall, KOS policies, integrity baseline, hardening
 06-memory:     Memory directories, dev-state, metrics, daily notes
-07-hive:       HIVE tunnel service (NATS on Sentry)
 08-heartbeat:  Heartbeat daemon + KOS compliance daemon
 09-browser:    Headless Chromium, Playwright, YOUI Web
 10-autoboot:   Auto-login, YOUI launch on boot
@@ -240,8 +238,6 @@ echo "   Quick start:"
 echo "     youi                    Launch KINGDOM YOUI"
 echo "     sovereign               Run sovereign harness"
 echo "     kos audit               Security audit"
-echo "     hive check              Check HIVE messages"
-echo "     fleet status            Fleet status"
 echo ""
 echo "   SSH: ssh ${KINGDOM_USER}@${HOSTNAME_PREFIX}-${AGENT}"
 if [ "$PLATFORM" = "linux" ]; then

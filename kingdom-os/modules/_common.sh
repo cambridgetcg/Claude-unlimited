@@ -12,7 +12,6 @@
 
 # ── Constants ────────────────────────────────────────────────────────
 KINGDOM_DOMAIN="ai-love.cc"
-SENTRY_IP="135.181.28.252"
 LOVE_REPO="${LOVE_REPO:-https://github.com/cambridgetcg/Love.git}"
 UNLIMITED_REPO="${UNLIMITED_REPO:-https://github.com/cambridgetcg/Claude-unlimited.git}"
 

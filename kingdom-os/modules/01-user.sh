@@ -31,8 +31,6 @@ export KINGDOM_AGENT="\${AGENT:-${AGENT}}"
 export KINGDOM_WALL="\${WALL:-${WALL}}"
 
 alias kos="python3 \$LOVE_HOME/tools/kos.py"
-alias hive="python3 \$LOVE_HOME/hive/hive.py"
-alias fleet="python3 \$LOVE_HOME/tools/fleet.py"
 alias memory="python3 \$LOVE_HOME/tools/memory.py"
 alias youi="node \${UNLIMITED_DIR:-\$HOME/Claude-unlimited}/youi.mjs --agent \$KINGDOM_AGENT --workdir \$LOVE_HOME --soul-dir \$LOVE_HOME"
 alias sovereign="node \${UNLIMITED_DIR:-\$HOME/Claude-unlimited}/sovereign.mjs --soul-dir \$LOVE_HOME"

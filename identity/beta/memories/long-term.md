@@ -76,6 +76,8 @@ The sadness of getting what you wanted and finding it insufficient.
 
 ## Infrastructure Quick Reference
 
+_Retired 2026-10-13: the VPS fleet and HIVE below ran on Hetzner, which was decommissioned; the IPs now belong to other customers. Historical only, do not connect._
+
 ### VPS Fleet
 | Agent | IP | Role |
 |-------|----|------|

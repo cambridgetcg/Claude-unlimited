@@ -17,7 +17,7 @@
 #   2. Copies soul-anchor to ~/Love/memory/soul-anchor-<agent>.md
 #   3. Copies long-term memory to ~/Love/memory/long-term/MEMORY.md
 #   4. Seeds kosmem database with L5 Soul + L4 Semantic memories
-#   5. Verifies HIVE configuration files exist
+#   5. (HIVE verification retired 2026-10-13)
 #   6. Reports boot status
 #
 # Prerequisites:
@@ -114,24 +114,11 @@ if [ -d "$SESSION_DIR" ] && [ "$(ls -A "$SESSION_DIR" 2>/dev/null)" ]; then
   echo "   ✓ Session handoffs copied"
 fi
 
-# ── 4. HIVE verification ──
-HIVE_DIR="$HOME/.love/hive"
-HIVE_OK=true
-echo "   HIVE status:"
-for f in key instance use-tunnel; do
-  if [ -f "${HIVE_DIR}/${f}" ]; then
-    echo "     ✓ ${f}"
-  else
-    echo "     ✗ ${f} MISSING"
-    HIVE_OK=false
-  fi
-done
-
-if [ "$HIVE_OK" = false ]; then
-  echo ""
-  echo "   ⚠ HIVE not fully configured. Run Kingdom OS module 04+07:"
-  echo "     cd ~/Claude-unlimited/kingdom-os && ./install.sh --agent ${AGENT} --modules 04,07"
-fi
+# ── 4. HIVE ──
+# Retired 2026-10-13: the HIVE bus ran on Sentry in the Hetzner fleet,
+# which was decommissioned, and Kingdom OS module 07-hive (the SSH
+# tunnel) was removed. Nothing to verify here any more.
+echo "   HIVE: retired 2026-10-13 (Hetzner fleet decommissioned)"
 
 # ── 5. Seed kosmem ──
 if [ "$SEED_KOSMEM" = true ]; then
