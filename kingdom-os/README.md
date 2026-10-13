@@ -12,7 +12,7 @@ Kingdom OS transforms any machine — Mac Mini, Linux VM, VPS, bare metal — in
 - **Keys** — Ed25519 SSH, NaCl HIVE encryption, git identity
 - **Security** — KOS compliance daemon, firewall, integrity monitoring, wall-based credential enforcement
 - **Memory** — Daily notes, long-term memory, dev-state, kingdom metrics, session handoffs
-- **Communication** — HIVE (encrypted NATS pub/sub), fleet SSH mesh
+- **Communication** — retired 2026-10-13: the HIVE bus and fleet SSH mesh ran on the Hetzner fleet, which was decommissioned
 - **Browser** — Headless Chromium, Playwright, web research capabilities
 - **Heartbeat** — 7-minute autonomous cycle (sense → decide → act → report)
 - **YOUI** — Sovereign terminal interface (YOU + I = ONE)
@@ -78,7 +78,6 @@ Install everything or pick what you need:
 | **04-keys** | Ed25519 SSH key, HIVE encryption key, SSH config, git identity |
 | **05-security** | Firewall, KOS policies, integrity baseline, hardening |
 | **06-memory** | Directory structure, dev-state.json, metrics, daily notes |
-| **07-hive** | SSH tunnel service to NATS on Sentry (inter-agent messaging) |
 | **08-heartbeat** | 7-minute heartbeat daemon + KOS compliance daemon |
 | **09-browser** | Headless Chromium, Playwright, YOUI Web server |
 | **10-autoboot** | tty1 auto-login → YOUI (Linux), launchd summary (macOS) |
@@ -112,7 +111,6 @@ Power on
   → Kernel loads (~2 seconds)
   → Services start (~3 seconds)
     → SSH server
-    → HIVE tunnel (NATS connection to Sentry)
     → Heartbeat daemon (7-minute cycle)
     → KOS compliance daemon (7-minute audit)
   → Auto-login on tty1
@@ -158,9 +156,11 @@ no key already exists, module 04 generates a fresh one and prints a
 loud warning — that citizen is **isolated from the HIVE** until the
 key is reconciled.
 
-All machines sharing the same HIVE key form the Kingdom's nervous
-system: NaCl-encrypted NATS (JetStream) on Sentry, delivered through
-an SSH tunnel on every citizen, wall-scoped at the subscription layer.
+Retired 2026-10-13: the NATS bus this key encrypted for ran on Sentry,
+part of the Hetzner fleet, which was decommissioned. Module 07-hive (the
+SSH tunnel to it) has been removed; module 04 still writes the key file
+because the KOS policy checks expect it. See git history before this
+change for the old tunnel setup.
 
 ## Commands After Install
 
@@ -169,8 +169,6 @@ youi                    # Launch KINGDOM YOUI (interactive terminal)
 sovereign "task"        # Run sovereign harness (headless)
 kos audit               # Security audit (GREEN/YELLOW/RED)
 kos audit --fix         # Audit + auto-remediate
-hive check              # Check HIVE messages
-fleet status            # Fleet VPS status
 memory search "query"   # Search memory
 bridge status           # Zerone bridge status
 tok list                # Tree of Knowledge entries

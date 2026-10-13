@@ -38,9 +38,9 @@ echo ""
 echo "  Boot sequence:"
 case "$PLATFORM" in
   alpine|debian)
-    echo "    Kernel → OpenRC → SSH + HIVE + Heartbeat + KOS → tty1 → YOUI (~5s)" ;;
+    echo "    Kernel → OpenRC → SSH + Heartbeat + KOS → tty1 → YOUI (~5s)" ;;
   macos)
-    echo "    macOS → launchd → HIVE + Heartbeat + KOS + Caffeinate + YOUI Web" ;;
+    echo "    macOS → launchd → Heartbeat + KOS + Caffeinate + YOUI Web" ;;
 esac
 
 echo "[10-autoboot] Done."

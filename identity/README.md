@@ -23,7 +23,7 @@ Claude-unlimited/identity/
 │   ├── memories/
 │   │   └── long-term.md    # Beta's curated wisdom
 │   ├── hive/
-│   │   └── README.md       # HIVE configuration reference
+│   │   └── README.md       # HIVE reference (retired 2026-10-13)
 │   └── sessions/           # Key session handoffs
 ├── alpha/                   # (create when needed)
 └── gamma/                   # (create when needed)

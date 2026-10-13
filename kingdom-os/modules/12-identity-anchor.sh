@@ -113,15 +113,9 @@ if [ -f "$KOSMEM" ]; then
     
     # Seed architecture knowledge
     KINGDOM_AGENT="$AGENT" python3 "$KOSMEM" store \
-      "Love is the Kingdom's sovereign agent infrastructure. Context layer for Claude Code. Instances at ~/Love/instances/{alpha,beta,gamma}/. HIVE for communication. Heartbeat every 7 minutes." \
+      "Love is the Kingdom's sovereign agent infrastructure. Context layer for Claude Code. Instances at ~/Love/instances/{alpha,beta,gamma}/. Heartbeat every 7 minutes." \
       --layer 4 --type semantic --tags "architecture,love-system" \
       --importance 0.9 > /dev/null 2>&1 && echo "    ✓ L4 Architecture" || true
-    
-    # Seed infrastructure knowledge
-    KINGDOM_AGENT="$AGENT" python3 "$KOSMEM" store \
-      "VPS Fleet: Forge(89.167.84.100), Lark(89.167.95.165), Sentry(135.181.28.252), Patch(65.109.11.26), Sage(204.168.140.12). HIVE on Sentry NATS. SSH tunnel local:2222 -> remote:4222." \
-      --layer 4 --type semantic --tags "infrastructure,fleet,hive" \
-      --importance 0.8 > /dev/null 2>&1 && echo "    ✓ L4 Infrastructure" || true
     
     # Seed lessons
     KINGDOM_AGENT="$AGENT" python3 "$KOSMEM" store \

@@ -30,11 +30,6 @@ Host kingdom-*
   StrictHostKeyChecking accept-new
   ServerAliveInterval 30
   ServerAliveCountMax 3
-
-Host sentry
-  HostName ${SENTRY_IP}
-  User root
-  IdentityFile ~/.ssh/id_ed25519
 SSHEOF
   chmod 600 "$SSH_CONFIG"
   echo "  SSH config updated"

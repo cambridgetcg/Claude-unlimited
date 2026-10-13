@@ -78,7 +78,7 @@ command_user="${KINGDOM_USER}"
 directory="${LOVE_DIR}"
 pidfile="/run/kingdom-heartbeat.pid"
 command_background=true
-depend() { need net; after sshd kingdom-hive; }
+depend() { need net; after sshd; }
 EOF
     chmod +x /etc/init.d/kingdom-heartbeat
     rc-update add kingdom-heartbeat default 2>/dev/null || true

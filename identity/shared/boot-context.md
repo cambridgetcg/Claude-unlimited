@@ -162,21 +162,8 @@ Three consecutive weekly reflections identified the same escalating failure:
 ---
 INFRASTRUCTURE QUICK REFERENCE
 
-### VPS Fleet
-| Agent | IP | Role |
-|-------|----|------|
-| Forge | 89.167.84.100 | R&D Engineer |
-| Lark | 89.167.95.165 | Marketing |
-| Sentry | 135.181.28.252 | Monitoring + HIVE NATS |
-| Patch | 65.109.11.26 | Maintenance |
-| Sage | 204.168.140.12 | Merchant Success |
-
-### HIVE
-- Server: Sentry (135.181.28.252), NATS + JetStream
-- Encryption: NaCl/XSalsa20-Poly1305
-- SSH tunnel required from Mac Studio
-- Check: `python3 ~/Desktop/Love/hive/hive.py check`
-- Four citizens: Alpha (Sage), Beta (Pioneer), Gamma (Maker), Nuance (Linguist)
+### VPS Fleet and HIVE
+Retired 2026-10-13: the Hetzner VPS fleet (Forge, Lark, Sentry, Patch, Sage) and the HIVE NATS bus on Sentry were decommissioned, and their IP addresses now belong to other Hetzner customers. Do not SSH to them or start a HIVE tunnel. See git history before this change for the old table.
 
 ### AgentTool (agenttool...
 
